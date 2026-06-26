@@ -1,0 +1,21 @@
+{
+  "name": "nimo-test",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "lint:price": "npm run lint --prefix crypto-price-service",
+    "lint:history": "npm run lint --prefix search-history-service",
+    "format": "prettier --write \"shared/src/**/*.js\" \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\"",
+    "format:shared": "prettier --write \"shared/src/**/*.js\"",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "@commitlint/cli": "^21.1.0",
+    "@commitlint/config-conventional": "^21.1.0",
+    "husky": "^9.1.7",
+    "prettier": "^3.3.3"
+  }
+}

@@ -1,0 +1,20 @@
+services:
+  crypto-price-service:
+    build:
+      context: .
+      dockerfile: crypto-price-service/Dockerfile
+    ports:
+      - '3001:3001'
+    restart: unless-stopped
+
+  search-history-service:
+    build:
+      context: .
+      dockerfile: search-history-service/Dockerfile
+    ports:
+      - '3002:3002'
+    environment:
+      - CRYPTO_PRICE_SERVICE_URL=http://crypto-price-service:3001
+    depends_on:
+      - crypto-price-service
+    restart: unless-stopped
