@@ -1,2 +1,1 @@
-npm run lint:price
-npm run lint:history
+npm run lint

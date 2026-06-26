@@ -6,15 +6,21 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "lint:price": "npm run lint --prefix crypto-price-service",
-    "lint:history": "npm run lint --prefix search-history-service",
-    "format": "prettier --write \"shared/src/**/*.js\" \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\"",
-    "format:shared": "prettier --write \"shared/src/**/*.js\"",
-    "prepare": "husky"
+    "prepare": "husky",
+    "lint": "eslint shared/ crypto-price-service/src/ search-history-service/src/",
+    "lint:price": "eslint crypto-price-service/src/",
+    "lint:history": "eslint search-history-service/src/",
+    "lint:shared": "eslint shared/",
+    "lint:fix": "eslint --fix shared/ crypto-price-service/src/ search-history-service/src/",
+    "format": "prettier --write \"shared/**/*.js\" \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\""
   },
   "devDependencies": {
     "@commitlint/cli": "^21.1.0",
     "@commitlint/config-conventional": "^21.1.0",
+    "@eslint/js": "^9.11.1",
+    "eslint": "^9.11.1",
+    "eslint-config-prettier": "^9.1.0",
+    "globals": "^15.9.0",
     "husky": "^9.1.7",
     "prettier": "^3.3.3"
   }
