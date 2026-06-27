@@ -1,0 +1,30 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: nimo-test — hello world Lambda with API Gateway
+
+Globals:
+  Function:
+    Runtime: nodejs24.x
+    Architectures:
+      - arm64
+    Timeout: 10
+    MemorySize: 256
+
+Resources:
+  HelloFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: crypto-price-service/src/handlers/ .handler
+      CodeUri: ../
+      Description: Hello world Lambda — smoke test
+      Events:
+        Api:
+          Type: HttpApi
+          Properties:
+            Path: /price
+            Method: GET
+
+Outp
+  ApiEndpoint:
+    Description: HTTP API endpoint
+    Value: !Sub 'https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/hello'
