@@ -10,8 +10,26 @@ Globals:
     Environment:
       Variables:
         NODE_OPTIONS: --enable-source-maps
+        # Reuse HTTP keep-alive connections to DynamoDB across invocations.
+        AWS_NODEJS_CONNECTION_REUSE_ENABLED: "1"
 
 Resources:
+  # ──────────────────────────────────────────────
+  # API Gateway — explicit resource enables throttling
+  # ──────────────────────────────────────────────
+  NimoApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: Prod
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          ThrottlingRateLimit: 10   # steady-state requests/sec
+          ThrottlingBurstLimit: 20  # token-bucket burst cap
+
+  # ──────────────────────────────────────────────
+  # DynamoDB Table
+  # ──────────────────────────────────────────────
   CryptoSearchHistoryTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -27,7 +45,17 @@ Resources:
           KeyType: HASH
         - AttributeName: searchedAt
           KeyType: RANGE
+      SSESpecification:
+        SSEEnabled: true
+        # Uses AWS-managed key by default.
 
+      # Point-in-Time Recovery: disabled for this take-home to keep setup simple.
+      # PointInTimeRecoverySpecification:
+      #   PointInTimeRecoveryEnabled: true
+
+  # ──────────────────────────────────────────────
+  # PriceFunction — writes search history
+  # ──────────────────────────────────────────────
   PriceFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -38,15 +66,22 @@ Resources:
         Variables:
           HISTORY_TABLE_NAME: !Ref CryptoSearchHistoryTable
       Policies:
-        - DynamoDBWritePolicy:
-            TableName: !Ref CryptoSearchHistoryTable
+        - Statement:
+            - Effect: Allow
+              # Least privilege: code only calls PutCommand — no delete or update needed.
+              Action: dynamodb:PutItem
+              Resource: !GetAtt CryptoSearchHistoryTable.Arn
       Events:
         GetPriceApi:
           Type: Api
           Properties:
+            RestApiId: !Ref NimoApi
             Path: /price
             Method: get
 
+  # ──────────────────────────────────────────────
+  # HistoryFunction — reads search history
+  # ──────────────────────────────────────────────
   HistoryFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -57,16 +92,20 @@ Resources:
         Variables:
           HISTORY_TABLE_NAME: !Ref CryptoSearchHistoryTable
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref CryptoSearchHistoryTable
+        - Statement:
+            - Effect: Allow
+              # Least privilege: read-only via Query on userId partition key — no Scan or GetItem.
+              Action: dynamodb:Query
+              Resource: !GetAtt CryptoSearchHistoryTable.Arn
       Events:
         GetHistoryApi:
           Type: Api
           Properties:
+            RestApiId: !Ref NimoApi
             Path: /history
             Method: get
 
 Outputs:
   ApiUrl:
     Description: API Gateway endpoint
-    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
+    Value: !Sub "https://${NimoApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/"
