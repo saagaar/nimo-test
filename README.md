@@ -236,3 +236,124 @@ sam deploy --guided
 ## Author
 
 Built as part of a serverless AWS engineering exercise.
+
+..............................................Documentation generated............................................
+
+# API Endpoints
+
+The application exposes two REST API endpoints through AWS API Gateway.
+
+## Base URL
+
+### Local Development
+
+```text
+http://localhost:3000
+```
+
+### AWS Deployment
+
+Replace `<api-id>` and `<region>` with the values generated after deployment.
+
+```text
+https://<api-id>.execute-api.<region>.amazonaws.com/Prod
+```
+
+---
+
+# 1. Get Cryptocurrency Price
+
+Retrieves the current cryptocurrency price from CoinGecko, stores the search history in DynamoDB, and returns the latest price.
+
+### Endpoint
+
+```http
+GET /price
+```
+
+### Query Parameters
+
+| Parameter | Type   | Required | Description                                           |
+| --------- | ------ | -------- | ----------------------------------------------------- |
+| coin      | string | Yes      | Cryptocurrency name (e.g. bitcoin, ethereum, solana). |
+| email     | string | Yes      | Email address used to associate the search history.   |
+
+### Example Request
+
+```http
+GET /price?coin=bitcoin&email=user@example.com
+```
+
+### Successful Response
+
+```json
+{
+  "success": true,
+  "message": "Cryptocurrency price retrieved successfully.",
+  "data": {
+    "coin": "Bitcoin",
+    "currency": "usd",
+    "price": 105432.12
+  }
+}
+```
+
+---
+
+# 2. Retrieve Search History
+
+Returns the cryptocurrency search history for a user.
+
+### Endpoint
+
+```http
+GET /history
+```
+
+### Query Parameters
+
+| Parameter | Type   | Required | Description                                         |
+| --------- | ------ | -------- | --------------------------------------------------- |
+| userId    | string | Yes      | User identifier used as the DynamoDB partition key. |
+
+> If your implementation uses the user's email as the partition key, replace `userId` with `email`.
+
+### Example Request
+
+```http
+GET /history?userId=user@example.com
+```
+
+### Successful Response
+
+```json
+{
+  "success": true,
+  "message": "Search history retrieved successfully.",
+  "data": [
+    {
+      "coin": "Bitcoin",
+      "currency": "usd",
+      "price": 105432.12,
+      "searchedAt": "2026-06-28T12:15:30.000Z"
+    },
+    {
+      "coin": "Ethereum",
+      "currency": "usd",
+      "price": 2540.48,
+      "searchedAt": "2026-06-28T12:18:42.000Z"
+    }
+  ]
+}
+```
+
+---
+
+# Error Responses
+
+| Status Code | Description                                                     |
+| ----------- | --------------------------------------------------------------- |
+| 400         | Invalid request parameters.                                     |
+| 404         | Cryptocurrency not found.                                       |
+| 500         | Internal server error.                                          |
+| 502         | Failed to communicate with the external cryptocurrency service. |

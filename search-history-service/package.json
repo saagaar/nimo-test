@@ -1,8 +1,11 @@
 {
   "name": "search-history-service",
   "version": "1.0.0",
-  "description": "Microservice to list cryptocurrency search history from crypto-price-service",
-  "main": "src/index.js",
+  "description": "Microservice to retrieve cryptocurrency search history",
+  "type": "module",
+  "imports": {
+    "#src/*": "./src/*"
+  },
   "engines": {
     "node": ">=24.0.0"
   },
@@ -11,6 +14,8 @@
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "express": "^4.21.0"
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "zod": "^4.0.0"
   }
 }
