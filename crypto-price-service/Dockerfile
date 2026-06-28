@@ -1,6 +1,7 @@
 FROM node:24-alpine
 
 WORKDIR /app
+COPY shared/ ./shared/
 
 # Copy shared utilities (required by this service via relative path)
 COPY --chown=node:node shared/ ./shared/

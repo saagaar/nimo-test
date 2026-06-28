@@ -7,12 +7,11 @@
   },
   "scripts": {
     "prepare": "husky",
-    "lint": "eslint shared/ crypto-price-service/src/ search-history-service/src/",
+    "lint": "eslint  crypto-price-service/src/ search-history-service/src/",
     "lint:price": "eslint crypto-price-service/src/",
     "lint:history": "eslint search-history-service/src/",
-    "lint:shared": "eslint shared/",
-    "lint:fix": "eslint --fix shared/ crypto-price-service/src/ search-history-service/src/",
-    "format": "prettier --write \"shared/**/*.js\" \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\""
+    "lint:fix": "eslint --fix  crypto-price-service/src/ search-history-service/src/",
+    "format": "prettier --write  \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\""
   },
   "devDependencies": {
     "@commitlint/cli": "^21.1.0",

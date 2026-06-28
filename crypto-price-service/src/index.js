@@ -1,5 +1,5 @@
 const express = require('express');
-const { PORTS } = require('../../shared/constants');
+const { PORTS } = require('#shared/constants');
 const priceRouter = require('./routes/price');
 
 const app = express();

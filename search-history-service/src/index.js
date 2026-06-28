@@ -1,9 +1,8 @@
 const express = require('express');
-const { PORTS } = require('../../shared/constants');
 const historyRouter = require('./routes/history');
 
 const app = express();
-const PORT = PORTS.SEARCH_HISTORY_SERVICE;
+const PORT = process.env.PORT || 3000;
 
 app.use(express.json());
 app.use('/', historyRouter);
