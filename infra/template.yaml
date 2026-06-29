@@ -2,6 +2,11 @@ AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
 Description: Nimo crypto price service
 
+Parameters:
+  EmailFromAddress:
+    Type: String
+    Description: SES-verified sender address for price alert emails.
+
 Globals:
   Function:
     Runtime: nodejs24.x
@@ -71,7 +76,7 @@ Resources:
         SSEEnabled: true
         # Uses AWS-managed key by default.
 
-      # Point-in-Time Recovery: disabled for this take-home to keep setup simple.
+      # Point-in-Time Recovery: disabled but can be enabled for production
       # PointInTimeRecoverySpeapcification:
       #   PointInTimeRecoveryEnabled: true
 
@@ -87,8 +92,7 @@ Resources:
       Environment:
         Variables:
           HISTORY_TABLE_NAME: !Ref CryptoSearchHistoryTable
-          # Must be an SES-verified email address. Replace before deploying.
-          EMAIL_FROM_ADDRESS: "your-verified@example.com"
+          EMAIL_FROM_ADDRESS: !Ref EmailFromAddress
       Policies:
         - Statement:
             - Effect: Allow
