@@ -495,19 +495,60 @@ PriceFunction writes → PriceWriteTable
 
 ## Test Coverage
 
-Test coverage is intentionally minimal for this take-home. The target for a production version would be:
+**Framework:** [Vitest](https://vitest.dev/) — chosen for native ESM support (no Babel transform required). Same API as Jest (`describe`, `it`, `expect`, `vi.fn()`).
 
-| Layer | Test type | Coverage goal |
-|-------|-----------|--------------|
-| Validators | Unit (Zod schema edge cases) | 100% |
-| Services | Unit (mock repository) | 100% |
-| Repositories | Integration (DynamoDB Local) | Key paths |
-| Handlers | Integration (SAM local invoke) | Happy path + error cases |
-| End-to-end | E2E via `sam local start-api` | Critical flows |
+**Run all tests:**
 
-Priority test cases:
-- Missing required query parameters → 400
-- Invalid email format → 400
-- DynamoDB unavailable → 502 (not 500)
-- Empty history (new user) → 200 with `count: 0`
-- Results are returned newest-first
+```bash
+npm test              # both services
+npm run test:price    # crypto-price-service only
+npm run test:history  # search-history-service only
+```
+
+No AWS credentials or running services required.
+
+### Implemented tests (18 total)
+
+#### Validators — pure unit, zero mocks
+
+| # | Test | Service |
+|---|------|---------|
+| 1 | Missing `coin` → throws `ValidationError` | price |
+| 2 | Missing `email` → throws `ValidationError` | price |
+| 3 | Invalid email format → throws `ValidationError` | price |
+| 4 | Valid input → returns parsed `{ coin, email }` | price |
+| 5 | Missing `userId` → throws `ValidationError` | history |
+| 6 | Invalid email format → throws `ValidationError` | history |
+| 7 | Valid email → returns parsed `{ userId }` | history |
+
+#### priceService — business logic with mocked dependencies
+
+| # | Scenario | Assert |
+|---|----------|--------|
+| 8 | No recent search found | `emailNotificationService.send` IS called |
+| 9 | Recent search exists (within 5 min) | `emailNotificationService.send` NOT called |
+| 10 | `getCoinPrice` throws | error propagates; `saveSearchHistory` never called |
+| 11 | `saveSearchHistory` throws | error propagates to handler |
+| 12 | Dedup window wiring | `findRecentSearch` receives `since` ≈ `now - 5 min` |
+
+Test #12 is the key invariant — it proves the 5-minute dedup window is actually wired, not just that the branch exists.
+
+#### Handlers — HTTP contract with mocked service layer
+
+| # | Scenario | Expected status |
+|---|----------|----------------|
+| 13 | `queryStringParameters: null` | 400 (no crash) |
+| 14 | `ValidationError` from validator | 400 |
+| 15 | `ExternalServiceError` from service | 502 |
+| 16 | Success | 200 with `{ success: true, data: { coin, currency, price, searchedAt } }` |
+| 17 | Missing `userId` | 400 |
+| 18 | Empty history (new user) | 200 with `{ items: [], count: 0 }` |
+
+### Intentionally deferred
+
+| Layer | Why deferred |
+|-------|-------------|
+| `historyRepository.js` | Needs DynamoDB Local — valuable integration test, not priority for take-home |
+| `coinGeckoClient.js` | External HTTP fetch mocking adds noise for low value at this stage |
+| `emailNotificationService.js` / `sesClient.js` | Thin wrappers; covered indirectly via service tests |
+| End-to-end | `sam local start-api` manual verification is sufficient |

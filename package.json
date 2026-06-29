@@ -11,7 +11,10 @@
     "lint:price": "eslint crypto-price-service/src/",
     "lint:history": "eslint search-history-service/src/",
     "lint:fix": "eslint --fix  crypto-price-service/src/ search-history-service/src/",
-    "format": "prettier --write  \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\""
+    "format": "prettier --write  \"crypto-price-service/src/**/*.js\" \"search-history-service/src/**/*.js\"",
+    "test": "vitest run --config crypto-price-service/vitest.config.js && vitest run --config search-history-service/vitest.config.js",
+    "test:price": "vitest run --config crypto-price-service/vitest.config.js",
+    "test:history": "vitest run --config search-history-service/vitest.config.js"
   },
   "devDependencies": {
     "@commitlint/cli": "^21.1.0",
@@ -21,6 +24,7 @@
     "eslint-config-prettier": "^9.1.0",
     "globals": "^15.9.0",
     "husky": "^9.1.7",
-    "prettier": "^3.3.3"
+    "prettier": "^3.3.3",
+    "vitest": "^2.0.0"
   }
 }
