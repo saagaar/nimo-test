@@ -46,6 +46,8 @@ Resources:
             Resource: !GetAtt CryptoSearchHistoryTable.Arn
       Users:
         - Nima-api
+        
+
 
   # ──────────────────────────────────────────────
   # DynamoDB Table
@@ -85,12 +87,18 @@ Resources:
       Environment:
         Variables:
           HISTORY_TABLE_NAME: !Ref CryptoSearchHistoryTable
+          # Must be an SES-verified email address. Replace before deploying.
+          EMAIL_FROM_ADDRESS: "your-verified@example.com"
       Policies:
         - Statement:
             - Effect: Allow
               # Least privilege: code only calls PutCommand — no delete or update needed.
               Action: dynamodb:PutItem
               Resource: !GetAtt CryptoSearchHistoryTable.Arn
+            - Effect: Allow
+              # Scoped to verified SES identities in this account — not a wildcard *.
+              Action: ses:SendEmail
+              Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
       Events:
         GetPriceApi:
           Type: Api

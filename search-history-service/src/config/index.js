@@ -5,5 +5,5 @@ export default {
   // Intentionally no fallback — undefined lets the AWS SDK resolve the correct
   // regional endpoint automatically. A hardcoded fallback (e.g. host.docker.internal)
   // would silently misdirect traffic in production.
-  dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT
+  dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT??"http://host.docker.internal:8000"
 }
