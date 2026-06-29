@@ -1,381 +1,176 @@
 # Nimo Crypto Price Notification System
 
-## Overview
+Serverless AWS application that fetches real-time cryptocurrency prices, records each search per user, and delivers email price alerts — built with Node.js 24, AWS Lambda, DynamoDB, and SES.
 
-This project is a serverless AWS application built using Node.js that allows users to:
+---
 
-- Fetch current cryptocurrency prices
-- Store each search in a history database
-- Send an email notification with the price asynchronously
-- Retrieve historical search data
+## Table of Contents
 
-The system is built using a microservice architecture and deployed entirely on AWS serverless services.
+- [Architecture](#architecture)
+- [Project Structure](#project-structure)
+- [Tech Stack](#tech-stack)
+- [API Reference](#api-reference)
+- [Email Notifications](#email-notifications)
+- [Security](#security)
+- [Data Model](#data-model)
+- [Local Development](#local-development)
+- [Testing](#testing)
+- [CI/CD](#cicd)
+- [Deployment](#deployment)
+- [Future Enhancements](#future-enhancements)
+- [Design Decisions](#design-decisions)
 
 ---
 
 ## Architecture
 
-This system contains **two microservices only**:
+Two Lambda functions sit behind a single API Gateway. They share one DynamoDB table — price service writes, history service reads.
 
-### 1. Price Service (Core Service)
-- Fetches real-time crypto price from CoinGecko API
-- Stores search data in DynamoDB
-- Triggers asynchronous email workflow via SQS/EventBridge
-- Does NOT wait for email to complete
-
-### 2. History Service
-- Retrieves stored search history from DynamoDB
-
----
-
-## Email Processing (Async Worker - NOT a microservice)
-
-Email sending is handled asynchronously as part of the system workflow:
-
-- Triggered via SQS/EventBridge from Price Service
-- Processed by a Lambda function
-- Sends email using AWS SES
-- Runs independently of API response
-
----
-
-## Architecture Flow
-
+```
 Client
   ↓
-API Gateway
-  ↓
-Price Service (Lambda)
-  ├── CoinGecko API
-  ├── DynamoDB (write history)
-  └── EventBridge / SQS (trigger email async)
-          ↓
-     Email Worker Lambda
-          ↓
-        AWS SES
+API Gateway  (throttled: 10 req/s steady, 20 burst)
+  ├── GET /price  →  PriceFunction (Lambda)
+  │                    ├── CoinGecko API       (fetch price)
+  │                    ├── DynamoDB            (write search record)
+  │                    └── AWS SES             (fire-and-forget email)
+  │
+  └── GET /history  →  HistoryFunction (Lambda)
+                         └── DynamoDB          (read search records)
+```
 
-History Service
-  ↓
-DynamoDB (read)
-
----
-
-## Tech Stack
-
-- Node.js 22
-- AWS Lambda
-- API Gateway
-- DynamoDB
-- SQS / EventBridge
-- AWS SES
-- AWS SAM (Infrastructure as Code)
-- GitHub Actions (CI/CD)
+Both functions are stateless and independently deployable. The email call is fire-and-forget — SES failures never affect the price API response.
 
 ---
 
 ## Project Structure
 
-services/
-  price-service/
-  history-service/
+```
+nimo-test/
+├── crypto-price-service/       # Lambda: GET /price
+│   └── src/
+│       ├── handlers/           # Lambda entry point (thin — parse, call service, respond)
+│       ├── services/           # Business logic (price lookup, dedup check, email trigger)
+│       ├── repositories/       # DynamoDB reads and writes
+│       ├── clients/            # CoinGecko, DynamoDB, SES SDK wrappers
+│       ├── validators/         # Zod request schemas
+│       ├── shared/             # Logger, error classes, response helpers
+│       └── config/             # Environment variable config
+│
+├── search-history-service/     # Lambda: GET /history
+│   └── src/
+│       ├── handlers/
+│       ├── services/
+│       ├── repositories/
+│       ├── clients/
+│       ├── validators/
+│       ├── shared/
+│       └── config/
+│
+├── shared/                     # Cross-service constants and utilities
+├── docs/
+│   └── openapi.yaml            # OpenAPI 3.0 spec
+├── infra/
+│   └── template.yaml           # AWS SAM template (Lambda, API Gateway, DynamoDB)
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml           # GitHub Actions CI/CD pipeline
+├── eslint.config.js            # Shared ESLint config (both services)
+├── .prettierrc                 # Shared Prettier config
+├── commitlint.config.js        # Conventional Commits enforcement
+├── package.json                # Root: dev tooling only (ESLint, Prettier, Husky, Vitest)
+└── .nvmrc                      # Node.js v24.18.0
+```
 
-workers/
-  email-worker/
-
-shared/
-  logger.js
-  errors.js
-  response.js
-  config.js
-
-infra/
-  template.yaml
-
-.github/workflows/
-  deploy.yml
-
-CLAUDE.md
-package.json
-.nvmrc
+Each service has its own `package.json` for **production dependencies only**. Dev tooling lives exclusively at the root.
 
 ---
 
-## API Endpoints
+## Tech Stack
 
-### Get Crypto Price
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Node.js 24 (`nodejs24.x`) |
+| Compute | AWS Lambda |
+| API | AWS API Gateway |
+| Database | AWS DynamoDB (PAY_PER_REQUEST, SSE enabled) |
+| Email | AWS SES |
+| Infrastructure | AWS SAM (CloudFormation) |
+| External pricing | CoinGecko API |
+| Validation | Zod |
+| Testing | Vitest |
+| CI/CD | GitHub Actions |
+| Linting | ESLint + Prettier |
+| Commits | Conventional Commits (commitlint + Husky) |
 
-GET /price?coin=bitcoin&email=user@example.com
+---
 
-Response:
+## API Reference
+
+**Interactive docs (Swagger UI):**
+[Open in Swagger Editor](https://editor.swagger.io/?url=https://raw.githubusercontent.com/saagaar/nimo-test/main/docs/openapi.yaml)
+
+The full OpenAPI 3.0 spec is at [`docs/openapi.yaml`](docs/openapi.yaml).
+
+### Base URLs
+
+| Environment | URL |
+|-------------|-----|
+| Local (`sam local`) | `http://localhost:3000` |
+| AWS Production | `https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/Prod` |
+
+---
+
+### GET /price
+
+Fetches the current price of a cryptocurrency, records the search in DynamoDB, and sends an email notification.
+
+**Query parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `coin` | string | Yes | Cryptocurrency name (e.g. `bitcoin`, `ethereum`, `solana`) |
+| `email` | string | Yes | User email — used for search history and email notifications |
+
+**Example**
+
+```bash
+curl "https://<api-url>/Prod/price?coin=bitcoin&email=user@example.com"
+```
+
+**200 Response**
+
+```json
 {
   "success": true,
   "data": {
     "coin": "bitcoin",
-    "price": 65000,
-    "currency": "usd"
-  }
-}
-
----
-
-### Get Search History
-
-GET /history?email=user@example.com
-
-Response:
-{
-  "success": true,
-  "data": [
-    {
-      "coin": "bitcoin",
-      "price": 65000,
-      "timestamp": "2026-06-26T10:00:00Z"
-    }
-  ]
-}
-
----
-
-## Key Design Decisions
-
-- Only two microservices for simplicity and clarity
-- Email is treated as an asynchronous workflow, not a standalone microservice
-- Serverless-first architecture using AWS Lambda
-- Event-driven email processing for scalability
-- Stateless Lambda functions
-- DynamoDB as single source of truth
-
----
-
-## Data Model
-
-DynamoDB Table: CryptoSearchHistory
-
-Partition Key: userId  
-Sort Key: timestamp  
-
-Attributes:
-- coin
-- price
-- email
-- createdAt
-
----
-
-## Email Workflow
-
-Every successful `/price` lookup triggers an email notification to the requesting user via AWS SES. The notification is fire-and-forget — it never blocks or delays the price API response.
-
-### Deduplication
-
-To prevent email spam, each `(email, coin)` pair is rate-limited to **one email per 5 minutes**. If the same user searches for the same cryptocurrency again within that window, the email is silently skipped and a log entry is written instead.
-
-```
-User searches bitcoin → email sent ✓
-User searches bitcoin again (2 min later) → skipped, already sent within 5 min
-User searches ethereum (same time) → email sent ✓  (different coin)
-User searches bitcoin again (6 min later) → email sent ✓  (window expired)
-```
-
-The deduplication window is tracked in memory on the Lambda instance. It resets on a cold start, which is acceptable for a 5-minute window.
-
-### Future: SQS-based async email
-
-The current implementation calls SES directly inside the Lambda. The planned upgrade is to publish to an SQS queue instead, with a dedicated `EmailWorkerLambda` consuming it. Only one line in `priceService.js` changes; the rest of the architecture stays the same.
-
----
-
-## Error Handling
-
-- Centralized error handling strategy
-- Structured API responses
-- External API failures handled safely
-- No sensitive data exposed
-
----
-
-## Validation
-
-- Input validation for API requests
-- Environment variable validation at startup
-- External API response validation
-
----
-
-## CI/CD Pipeline
-
-- GitHub Actions used for deployment
-- Steps:
-  - Install dependencies
-  - Lint code
-  - Build SAM application
-  - Deploy to AWS
-
----
-
-## Deployment
-
-Prerequisites:
-- AWS CLI configured
-- AWS SAM CLI installed
-- Node.js 22+
-
-Commands:
-
-sam build
-sam deploy --guided
-
----
-
-## Assumptions
-
-- User identification via email or userId
-- No authentication layer implemented
-- Email is asynchronous for performance reasons
-- CoinGecko API used for pricing
-
----
-
-## Future Improvements
-
-- Add authentication (Cognito)
-- Add caching layer (Redis)
-- Add DLQ for email failures
-- Add rate limiting
-- Add observability dashboards
-
----
-
-## Author
-
-Built as part of a serverless AWS engineering exercise.
-
-..............................................Documentation generated............................................
-
-# API Endpoints
-
-The application exposes two REST API endpoints through AWS API Gateway.
-
-## Base URL
-
-### Local Development
-
-```text
-http://localhost:3000
-```
-
-### AWS Deployment
-
-Replace `<api-id>` and `<region>` with the values generated after deployment.
-
-```text
-https://<api-id>.execute-api.<region>.amazonaws.com/Prod
-```
-
----
-
-# 1. Get Cryptocurrency Price
-
-Retrieves the current cryptocurrency price from CoinGecko, stores the search history in DynamoDB, and returns the latest price.
-
-### Endpoint
-
-```http
-GET /price
-```
-
-### Query Parameters
-
-| Parameter | Type   | Required | Description                                           |
-| --------- | ------ | -------- | ----------------------------------------------------- |
-| coin      | string | Yes      | Cryptocurrency name (e.g. bitcoin, ethereum, solana). |
-| email     | string | Yes      | Email address used to associate the search history.   |
-
-### Example Request
-
-```http
-GET /price?coin=bitcoin&email=user@example.com
-```
-
-### Successful Response
-
-```json
-{
-  "success": true,
-  "message": "Cryptocurrency price retrieved successfully.",
-  "data": {
-    "coin": "Bitcoin",
     "currency": "usd",
-    "price": 105432.12
+    "price": 105432.12,
+    "searchedAt": "2026-06-30T10:00:00.000Z"
   }
 }
 ```
 
 ---
 
-# 2. Retrieve Search History
+### GET /history
 
-Returns the cryptocurrency search history for a user.
+Returns all cryptocurrency searches made by a user, sorted newest first.
 
-### Endpoint
+**Query parameters**
 
-```http
-GET /history
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `email` | string | Yes | Email address of the user |
+
+**Example**
+
+```bash
+curl "https://<api-url>/Prod/history?email=user@example.com"
 ```
 
-### Query Parameters
-
-| Parameter | Type   | Required | Description                                         |
-| --------- | ------ | -------- | --------------------------------------------------- |
-| email     | string | Yes      | Email address used to look up the user's search history. |
-
-### Example Request
-
-```http
-GET /history?email=user@example.com
-```
-
-### Successful Response
-
-```json
-{
-  "success": true,
-  "message": "Search history retrieved successfully.",
-  "data": [
-    {
-      "coin": "Bitcoin",
-      "currency": "usd",
-      "price": 105432.12,
-      "searchedAt": "2026-06-28T12:15:30.000Z"
-    },
-    {
-      "coin": "Ethereum",
-      "currency": "usd",
-      "price": 2540.48,
-      "searchedAt": "2026-06-28T12:18:42.000Z"
-    }
-  ]
-}
-```
-
----
-
-# Error Responses
-
-| Status Code | Description                                                     |
-| ----------- | --------------------------------------------------------------- |
-| 400         | Invalid request parameters.                                     |
-| 404         | Cryptocurrency not found.                                       |
-| 500         | Internal server error.                                          |
-| 502         | Failed to communicate with the external cryptocurrency service. |
-
----
-
-# Implementation Notes
-
-## Actual Response Format
-
-The history endpoint returns a paginated envelope — not a flat array — so callers always know the record count without parsing:
+**200 Response**
 
 ```json
 {
@@ -387,7 +182,7 @@ The history endpoint returns a paginated envelope — not a flat array — so ca
         "coin": "bitcoin",
         "currency": "usd",
         "price": 105432.12,
-        "searchedAt": "2026-06-28T12:15:30.000Z"
+        "searchedAt": "2026-06-30T10:15:00.000Z"
       }
     ],
     "count": 1
@@ -395,109 +190,157 @@ The history endpoint returns a paginated envelope — not a flat array — so ca
 }
 ```
 
-Results are sorted **newest first** (`ScanIndexForward: false`) at the database level.
-
-## DynamoDB Sort Key
-
-The DynamoDB sort key is `searchedAt` (ISO 8601 string), not `timestamp`. Records are queried by `userId` (partition key = email address) and sorted by `searchedAt`.
-
-## Runtime
-
-Both Lambda functions run on **Node.js 24** (`nodejs24.x`).
+Returns `{ "items": [], "count": 0 }` for users with no history.
 
 ---
 
-# Security Features Implemented
+### Error responses
 
-The following security controls are active in the current deployment — not future work.
+| Status | Cause |
+|--------|-------|
+| `400` | Missing or invalid query parameter |
+| `500` | Unexpected internal error |
+| `502` | CoinGecko API or DynamoDB unavailable |
 
-## API Gateway Throttling
+```json
+{
+  "success": false,
+  "error": {
+    "message": "Coin is required"
+  }
+}
+```
 
-A rate limit is enforced at the API Gateway stage level across all endpoints:
+---
 
-- **Steady-state:** 10 requests per second
-- **Burst cap:** 20 concurrent requests (token-bucket)
+## Email Notifications
 
-Any client exceeding this receives `HTTP 429 Too Many Requests` automatically. This is configured via `MethodSettings` on the `NimoApi` resource in `infra/template.yaml`.
+Every successful `/price` request triggers an email to the requesting user via AWS SES. The call is fire-and-forget — it runs after the DynamoDB write and never blocks or delays the API response. SES failures are logged as warnings; the price response always returns 200.
 
-## Least-Privilege IAM
+### Deduplication (5-minute window)
 
-Each Lambda has a minimal inline IAM policy scoped to the exact table ARN:
+To prevent spam, at most one email is sent per `(email, coin)` pair within any 5-minute window. Before sending, the service queries DynamoDB for a recent search by the same user for the same coin. If one exists within the window, the email is skipped.
 
-| Function | Permissions granted |
-|----------|-------------------|
+```
+User searches bitcoin        → email sent ✓
+User searches bitcoin 2 min later → skipped (within 5-min window)
+User searches ethereum same time  → email sent ✓ (different coin)
+User searches bitcoin 6 min later → email sent ✓ (window expired)
+```
+
+### Future: SQS-based decoupled email
+
+The current design calls SES synchronously (fire-and-forget) from inside the Lambda. The planned upgrade decouples this entirely:
+
+1. `PriceFunction` publishes a message to an SQS FIFO queue after the DynamoDB write.
+2. A dedicated `EmailWorkerLambda` consumes the queue and calls SES.
+3. SQS message deduplication IDs replace the DynamoDB lookup for dedup.
+
+Only one line in `priceService.js` changes when this is implemented — the `EmailNotificationService` class and its callers remain untouched.
+
+---
+
+## Security
+
+The following controls are active in the current deployment.
+
+### Least-privilege IAM
+
+Each Lambda has a minimal inline policy scoped to the exact DynamoDB table ARN:
+
+| Function | Permission |
+|----------|-----------|
 | `PriceFunction` | `dynamodb:PutItem` only |
 | `HistoryFunction` | `dynamodb:Query` only |
 
-Neither function can scan, delete, or describe the table.
+`PriceFunction` also has `ses:SendEmail` scoped to verified SES identities in the account (`arn:aws:ses:region:account:identity/*`) — not a wildcard.
 
-## DynamoDB Encryption at Rest
+### API Gateway throttling
 
-The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS key. Encryption is explicitly declared in the template rather than relying on the silent default.
+Enforced at the stage level across all endpoints:
 
-## Input Validation
+- **Steady-state:** 10 requests/second
+- **Burst cap:** 20 requests (token-bucket)
 
-All incoming query parameters are validated with Zod before reaching business logic. Invalid or missing parameters return a structured `400 ValidationError` — no raw errors are exposed to the caller.
+Clients exceeding the limit receive `HTTP 429` automatically.
+
+### DynamoDB encryption at rest
+
+The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS key. This is explicitly declared in the SAM template rather than relying on the silent default.
+
+### Input validation
+
+All query parameters are validated with Zod before reaching business logic. Invalid or missing parameters return a structured `400 ValidationError`. No raw error details or stack traces are exposed to the caller.
+
+### No secrets in code
+
+`EMAIL_FROM_ADDRESS` is a SAM parameter injected at deploy time via a GitHub Secret. AWS credentials are never stored in the repository.
 
 ---
 
-# Future Enhancements
+## Data Model
 
-## Email Notifications via SQS (Async)
+**Table:** `CryptoSearchHistory`
 
-Email sending is architecturally planned but not yet implemented. The intended design:
+| Attribute | Type | Role |
+|-----------|------|------|
+| `userId` | String | Partition key (stores the user's email address) |
+| `searchedAt` | String (ISO 8601) | Sort key |
+| `coin` | String | Cryptocurrency identifier |
+| `currency` | String | Fiat currency code |
+| `price` | Number | Price at time of search |
+| `email` | String | Email address (redundant with `userId`, kept for readability) |
 
-1. After saving the search to DynamoDB, `PriceFunction` publishes an event to an SQS queue (or EventBridge).
-2. A separate `EmailWorkerLambda` consumes the queue and sends the email via AWS SES.
-3. The API response is never blocked waiting for the email — it returns immediately after the DynamoDB write.
+Records are queried by `userId` and sorted by `searchedAt` descending (`ScanIndexForward: false`) — no additional index needed.
 
-**Idempotency:** To avoid sending duplicate emails for repeated searches of the same cryptocurrency, the email worker will check whether a notification was already sent for the same `(userId, coin, date)` combination before dispatching. This can be enforced with a DynamoDB conditional write on a separate `EmailsSent` tracking table, or by using SQS message deduplication IDs on a FIFO queue.
+---
 
-## API Key Authentication
+## Local Development
 
-The API is currently public with only throttling as a guard. For production, API Gateway usage plans and API keys would be added:
+### Prerequisites
 
-- Each consumer (client application or partner) receives a unique API key.
-- Usage plans set per-key rate limits and quotas independently of the global throttle.
-- The `x-api-key` header is required on every request; missing or invalid keys return `HTTP 403`.
-- This allows auditing per-client usage and revoking individual keys without affecting others.
+- Node.js 24 (`nvm use` reads `.nvmrc`)
+- AWS CLI configured
+- AWS SAM CLI
+- Docker (for DynamoDB Local)
+- DynamoDB Local running on port 8000
 
-No Cognito or JWT-based auth is needed for this use case — API keys are sufficient for server-to-server access control on a public data API.
+### Setup
 
-## Distributed Databases per Microservice
+```bash
+# 1. Install dev tooling and wire git hooks
+npm install
 
-Currently both services share the single `CryptoSearchHistory` table. In a production microservice architecture each service should own its own data store independently.
-
-**Proposed setup:**
-
-| Service | Owns | Access |
-|---------|------|--------|
-| `crypto-price-service` | `PriceWriteTable` | Write-only |
-| `search-history-service` | `HistoryReadTable` | Read-only |
-
-**Synchronization strategy — DynamoDB Streams:**
-
-```
-PriceFunction writes → PriceWriteTable
-                              ↓
-                    DynamoDB Stream (new image)
-                              ↓
-                    SyncLambda (triggered by stream)
-                              ↓
-                    HistoryReadTable (eventual consistency)
+# 2. Install production dependencies for each service
+cd crypto-price-service && npm install
+cd ../search-history-service && npm install
 ```
 
-- `PriceWriteTable` enables a DynamoDB Stream on `NEW_IMAGE`.
-- A lightweight `SyncLambda` consumes the stream and writes the record into `HistoryReadTable`.
-- `search-history-service` only ever reads from its own table — it has no knowledge of the write side.
-- This pattern is **eventually consistent**: history may lag by milliseconds but the write API is never blocked.
-- Failures in the sync are handled via a Dead Letter Queue (DLQ) on the stream consumer — no data is lost.
+### Running locally
 
-## Test Coverage
+```bash
+# Start DynamoDB Local (Docker)
+docker run -p 8000:8000 amazon/dynamodb-local
 
-**Framework:** [Vitest](https://vitest.dev/) — chosen for native ESM support (no Babel transform required). Same API as Jest (`describe`, `it`, `expect`, `vi.fn()`).
+# Start both Lambdas via SAM (Terminal 1)
+sam local start-api -t infra/template.yaml --env-vars env.local.json
+```
 
-**Run all tests:**
+`env.local.json` supplies `HISTORY_TABLE_NAME`, `DYNAMODB_ENDPOINT`, `AWS_REGION`, and `EMAIL_FROM_ADDRESS` to each function without touching the SAM template.
+
+### Linting and formatting
+
+```bash
+npm run lint          # ESLint across both services
+npm run lint:fix      # Auto-fix
+npm run format        # Prettier across both services
+```
+
+---
+
+## Testing
+
+**Framework:** [Vitest](https://vitest.dev/) — native ESM support, same API as Jest.
 
 ```bash
 npm test              # both services
@@ -507,48 +350,194 @@ npm run test:history  # search-history-service only
 
 No AWS credentials or running services required.
 
-### Implemented tests (18 total)
+### Test coverage (18 tests)
 
 #### Validators — pure unit, zero mocks
 
 | # | Test | Service |
 |---|------|---------|
-| 1 | Missing `coin` → throws `ValidationError` | price |
-| 2 | Missing `email` → throws `ValidationError` | price |
-| 3 | Invalid email format → throws `ValidationError` | price |
-| 4 | Valid input → returns parsed `{ coin, email }` | price |
-| 5 | Missing `userId` → throws `ValidationError` | history |
-| 6 | Invalid email format → throws `ValidationError` | history |
-| 7 | Valid email → returns parsed `{ userId }` | history |
+| 1 | Missing `coin` → `ValidationError` | price |
+| 2 | Missing `email` → `ValidationError` | price |
+| 3 | Invalid email format → `ValidationError` | price |
+| 4 | Valid input → returns parsed data | price |
+| 5 | Missing `email` → `ValidationError` | history |
+| 6 | Invalid email format → `ValidationError` | history |
+| 7 | Valid email → returns parsed data | history |
 
-#### priceService — business logic with mocked dependencies
+#### priceService — business logic, mocked dependencies
 
 | # | Scenario | Assert |
 |---|----------|--------|
-| 8 | No recent search found | `emailNotificationService.send` IS called |
-| 9 | Recent search exists (within 5 min) | `emailNotificationService.send` NOT called |
+| 8 | No recent search → email IS sent | `emailNotificationService.send` called |
+| 9 | Recent search within 5 min → email skipped | `emailNotificationService.send` NOT called |
 | 10 | `getCoinPrice` throws | error propagates; `saveSearchHistory` never called |
 | 11 | `saveSearchHistory` throws | error propagates to handler |
-| 12 | Dedup window wiring | `findRecentSearch` receives `since` ≈ `now - 5 min` |
+| 12 | Dedup window wiring | `findRecentSearch` receives `since` ≈ `now − 5 min` |
 
-Test #12 is the key invariant — it proves the 5-minute dedup window is actually wired, not just that the branch exists.
+Test #12 is the key invariant — it proves the dedup window is correctly wired, not just that the branch exists.
 
-#### Handlers — HTTP contract with mocked service layer
+#### Handlers — HTTP contract, mocked service layer
 
-| # | Scenario | Expected status |
-|---|----------|----------------|
+| # | Scenario | Status |
+|---|----------|--------|
 | 13 | `queryStringParameters: null` | 400 (no crash) |
-| 14 | `ValidationError` from validator | 400 |
-| 15 | `ExternalServiceError` from service | 502 |
-| 16 | Success | 200 with `{ success: true, data: { coin, currency, price, searchedAt } }` |
-| 17 | Missing `userId` | 400 |
+| 14 | `ValidationError` | 400 |
+| 15 | `ExternalServiceError` | 502 |
+| 16 | Success | 200 |
+| 17 | Missing `email` | 400 |
 | 18 | Empty history (new user) | 200 with `{ items: [], count: 0 }` |
 
 ### Intentionally deferred
 
-| Layer | Why deferred |
-|-------|-------------|
-| `historyRepository.js` | Needs DynamoDB Local — valuable integration test, not priority for take-home |
-| `coinGeckoClient.js` | External HTTP fetch mocking adds noise for low value at this stage |
-| `emailNotificationService.js` / `sesClient.js` | Thin wrappers; covered indirectly via service tests |
+| Layer | Reason |
+|-------|--------|
+| `historyRepository.js` | Requires DynamoDB Local — valuable integration test, out of scope for take-home |
+| `coinGeckoClient.js` | Fetch mocking adds noise for low value at this stage |
+| `sesClient.js` / `emailNotificationService.js` | Thin wrappers; covered indirectly via service tests |
 | End-to-end | `sam local start-api` manual verification is sufficient |
+
+---
+
+## CI/CD
+
+Two-job GitHub Actions pipeline defined in `.github/workflows/ci-cd.yml`.
+
+```
+Every push / PR to any branch
+        ↓
+    ci job
+    ├── npm ci (root + each service)
+    ├── npm run lint
+    ├── npm test
+    └── sam validate --lint
+
+Push to main (after ci passes)
+        ↓
+    deploy job
+    ├── sam build
+    └── sam deploy
+```
+
+### GitHub Secrets required
+
+| Secret | Description |
+|--------|-------------|
+| `AWS_ACCESS_KEY_ID` | Access key for the deployment IAM user |
+| `AWS_SECRET_ACCESS_KEY` | Secret key for the deployment IAM user |
+| `EMAIL_FROM_ADDRESS` | SES-verified sender email address |
+
+The deployment user needs CloudFormation, Lambda, DynamoDB, IAM, SES, and S3 permissions (`--resolve-s3` auto-manages the artifact bucket).
+
+---
+
+## Deployment
+
+### First-time deploy (guided)
+
+```bash
+sam build -t infra/template.yaml
+sam deploy --guided \
+  --parameter-overrides EmailFromAddress=your-verified@email.com
+```
+
+### Subsequent deploys
+
+```bash
+sam build -t infra/template.yaml
+sam deploy \
+  --stack-name nimo-crypto \
+  --region ap-southeast-2 \
+  --capabilities CAPABILITY_IAM \
+  --no-confirm-changeset \
+  --no-fail-on-empty-changeset \
+  --resolve-s3 \
+  --parameter-overrides EmailFromAddress=your-verified@email.com
+```
+
+After deploy, retrieve the API URL:
+
+```bash
+aws cloudformation describe-stacks \
+  --stack-name nimo-crypto \
+  --region ap-southeast-2 \
+  --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+  --output text
+```
+
+> **SES sandbox:** If your AWS account is in SES sandbox mode, both the sender and recipient email addresses must be verified in the SES console before emails will be delivered.
+
+---
+
+## Future Enhancements
+
+### 1. SQS-based async email worker
+
+Replace the in-Lambda SES call with an SQS publish. A dedicated `EmailWorkerLambda` processes the queue. Benefits: Lambda response time is unaffected even if SES is slow, retries are handled by SQS, and a Dead Letter Queue (DLQ) catches failed sends for later inspection. Only `priceService.js` changes — one line.
+
+### 2. API Key authentication
+
+The API is currently public, protected only by throttling. Adding API Gateway usage plans and API keys would allow:
+
+- Per-consumer rate limits and quotas independent of the global throttle
+- Auditing of per-key usage
+- Key revocation without affecting other consumers
+
+The `x-api-key` header would be required on all requests; missing or invalid keys return `HTTP 403`. No Cognito or JWT overhead needed for a server-to-server API.
+
+### 3. Distributed data stores per microservice
+
+Both services currently share a single DynamoDB table. True microservice independence means each service owns its data:
+
+| Service | Table | Access |
+|---------|-------|--------|
+| `crypto-price-service` | `PriceWriteTable` | Write-only |
+| `search-history-service` | `HistoryReadTable` | Read-only |
+
+**Sync via DynamoDB Streams:**
+
+```
+PriceFunction writes → PriceWriteTable
+                              ↓
+                    DynamoDB Stream (NEW_IMAGE)
+                              ↓
+                    SyncLambda (stream consumer)
+                              ↓
+                    HistoryReadTable (eventual consistency, ms lag)
+```
+
+Sync failures are caught by a DLQ on the stream consumer — no data loss.
+
+### 4. Repository integration tests
+
+The `historyRepository.js` layer is currently untested because it requires DynamoDB Local. Priority test cases when added:
+
+- `findRecentSearch` returns `null` for a new user
+- `findRecentSearch` returns a record for a recent same-coin search
+- `saveSearchHistory` writes the correct attributes
+- Results are returned newest-first
+
+### 5. Observability
+
+- Structured logs already use a consistent JSON format with `level`, `timestamp`, `message`, and `metadata` fields — ready to ship to CloudWatch Insights.
+- Future: add CloudWatch alarms on Lambda error rate and P99 duration, an X-Ray trace per request, and a dashboard for the CoinGecko error rate and email send rate.
+
+---
+
+## Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| CommonJS → ESM (`"type": "module"`) | Native Node.js 24 module format; no transpile step; enables top-level `await` |
+| Zod for validation | Declarative schemas, typed output, first-class ESM support |
+| Fire-and-forget email | SES latency should never add to the price API response time |
+| DynamoDB dedup query instead of in-memory Map | Survives Lambda cold starts and scales across concurrent instances; in-memory state resets on cold start |
+| Shared `package.json` for dev tooling | Single ESLint/Prettier/Husky config; no duplication across services |
+| `sam validate --lint` in CI | Catches CloudFormation errors before any AWS API call is made |
+| `--resolve-s3` in SAM deploy | No manual S3 bucket management; SAM handles the artifact bucket lifecycle |
+| `PAY_PER_REQUEST` DynamoDB billing | No capacity planning needed; scales to zero at rest |
+
+---
+
+## Author
+
+Built as a serverless AWS engineering exercise by Sagar.

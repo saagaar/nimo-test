@@ -1,0 +1,273 @@
+openapi: 3.0.3
+
+info:
+  title: Nimo Crypto Price Notification API
+  description: |
+    Serverless AWS API for fetching real-time cryptocurrency prices, storing
+    search history per user, and delivering email price alerts via AWS SES.
+
+    Built with Node.js 24 on AWS Lambda + API Gateway + DynamoDB.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:3000
+    description: Local development (sam local start-api)
+  - url: https://{apiId}.execute-api.ap-southeast-2.amazonaws.com/Prod
+    description: AWS Production
+    variables:
+      apiId:
+        default: your-api-id
+        description: API Gateway ID generated after sam deploy
+
+paths:
+  /price:
+    get:
+      summary: Get cryptocurrency price
+      description: |
+        Fetches the current price of a cryptocurrency from the CoinGecko API,
+        stores the search in DynamoDB, and triggers a fire-and-forget email
+        notification to the user via AWS SES.
+
+        **Email deduplication:** At most one email per `(email, coin)` pair is
+        sent within any 5-minute window. If the same user searches the same coin
+        within 5 minutes, the email is skipped silently — the price response is
+        always returned regardless.
+      operationId: getPrice
+      tags:
+        - Price
+      parameters:
+        - name: coin
+          in: query
+          required: true
+          description: Cryptocurrency identifier as used by CoinGecko (e.g. bitcoin, ethereum, solana).
+          schema:
+            type: string
+            example: bitcoin
+        - name: email
+          in: query
+          required: true
+          description: >
+            Email address of the user. Used as the DynamoDB partition key for
+            search history and as the recipient address for email notifications.
+          schema:
+            type: string
+            format: email
+            example: user@example.com
+      responses:
+        '200':
+          description: Price retrieved and search recorded successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PriceResponse'
+              example:
+                success: true
+                data:
+                  coin: bitcoin
+                  currency: usd
+                  price: 105432.12
+                  searchedAt: "2026-06-30T10:00:00.000Z"
+        '400':
+          description: Missing or invalid query parameters.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                missingCoin:
+                  summary: Missing coin parameter
+                  value:
+                    success: false
+                    error:
+                      message: "Coin is required"
+                invalidEmail:
+                  summary: Invalid email format
+                  value:
+                    success: false
+                    error:
+                      message: "Invalid email address"
+        '500':
+          description: Unexpected internal error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: CoinGecko API is unavailable or returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  message: "Failed to retrieve cryptocurrency price from CoinGecko."
+
+  /history:
+    get:
+      summary: Get search history
+      description: |
+        Returns all cryptocurrency searches made by a user, sorted newest first.
+        Results include the coin, currency, price at time of search, and timestamp.
+      operationId: getHistory
+      tags:
+        - History
+      parameters:
+        - name: email
+          in: query
+          required: true
+          description: Email address of the user whose history to retrieve.
+          schema:
+            type: string
+            format: email
+            example: user@example.com
+      responses:
+        '200':
+          description: History retrieved successfully. Returns an empty items array for new users.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HistoryResponse'
+              examples:
+                withResults:
+                  summary: User with existing history
+                  value:
+                    success: true
+                    data:
+                      items:
+                        - userId: user@example.com
+                          coin: bitcoin
+                          currency: usd
+                          price: 105432.12
+                          searchedAt: "2026-06-30T10:15:00.000Z"
+                        - userId: user@example.com
+                          coin: ethereum
+                          currency: usd
+                          price: 2540.48
+                          searchedAt: "2026-06-30T10:10:00.000Z"
+                      count: 2
+                empty:
+                  summary: New user with no history
+                  value:
+                    success: true
+                    data:
+                      items: []
+                      count: 0
+        '400':
+          description: Missing or invalid email parameter.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                success: false
+                error:
+                  message: "A valid email address is required"
+        '500':
+          description: Unexpected internal error.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: DynamoDB is unavailable.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  schemas:
+    PriceResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required: [coin, currency, price, searchedAt]
+          properties:
+            coin:
+              type: string
+              description: Cryptocurrency identifier.
+              example: bitcoin
+            currency:
+              type: string
+              description: Fiat currency code.
+              example: usd
+            price:
+              type: number
+              description: Current price in the specified currency.
+              example: 105432.12
+            searchedAt:
+              type: string
+              format: date-time
+              description: ISO 8601 timestamp of when the search was recorded.
+              example: "2026-06-30T10:00:00.000Z"
+
+    HistoryResponse:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          example: true
+        data:
+          type: object
+          required: [items, count]
+          properties:
+            items:
+              type: array
+              description: Search records sorted newest first.
+              items:
+                $ref: '#/components/schemas/HistoryItem'
+            count:
+              type: integer
+              description: Total number of records returned.
+              example: 2
+
+    HistoryItem:
+      type: object
+      required: [userId, coin, currency, price, searchedAt]
+      properties:
+        userId:
+          type: string
+          format: email
+          description: Email address used as the DynamoDB partition key.
+          example: user@example.com
+        coin:
+          type: string
+          example: bitcoin
+        currency:
+          type: string
+          example: usd
+        price:
+          type: number
+          example: 105432.12
+        searchedAt:
+          type: string
+          format: date-time
+          example: "2026-06-30T10:00:00.000Z"
+
+    ErrorResponse:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          required: [message]
+          properties:
+            message:
+              type: string
+              example: "Coin is required"
+
+tags:
+  - name: Price
+    description: Fetch real-time cryptocurrency prices.
+  - name: History
+    description: Retrieve user search history.
