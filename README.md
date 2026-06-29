@@ -164,11 +164,24 @@ Attributes:
 
 ## Email Workflow
 
-- Triggered asynchronously from Price Service
-- Uses SQS/EventBridge
-- Processed by a Lambda worker
-- Sends email via AWS SES
-- Does not block API response
+Every successful `/price` lookup triggers an email notification to the requesting user via AWS SES. The notification is fire-and-forget — it never blocks or delays the price API response.
+
+### Deduplication
+
+To prevent email spam, each `(email, coin)` pair is rate-limited to **one email per 5 minutes**. If the same user searches for the same cryptocurrency again within that window, the email is silently skipped and a log entry is written instead.
+
+```
+User searches bitcoin → email sent ✓
+User searches bitcoin again (2 min later) → skipped, already sent within 5 min
+User searches ethereum (same time) → email sent ✓  (different coin)
+User searches bitcoin again (6 min later) → email sent ✓  (window expired)
+```
+
+The deduplication window is tracked in memory on the Lambda instance. It resets on a cold start, which is acceptable for a 5-minute window.
+
+### Future: SQS-based async email
+
+The current implementation calls SES directly inside the Lambda. The planned upgrade is to publish to an SQS queue instead, with a dedicated `EmailWorkerLambda` consuming it. Only one line in `priceService.js` changes; the rest of the architecture stays the same.
 
 ---
 
@@ -355,3 +368,146 @@ GET /history?email=user@example.com
 | 404         | Cryptocurrency not found.                                       |
 | 500         | Internal server error.                                          |
 | 502         | Failed to communicate with the external cryptocurrency service. |
+
+---
+
+# Implementation Notes
+
+## Actual Response Format
+
+The history endpoint returns a paginated envelope — not a flat array — so callers always know the record count without parsing:
+
+```json
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "userId": "user@example.com",
+        "coin": "bitcoin",
+        "currency": "usd",
+        "price": 105432.12,
+        "searchedAt": "2026-06-28T12:15:30.000Z"
+      }
+    ],
+    "count": 1
+  }
+}
+```
+
+Results are sorted **newest first** (`ScanIndexForward: false`) at the database level.
+
+## DynamoDB Sort Key
+
+The DynamoDB sort key is `searchedAt` (ISO 8601 string), not `timestamp`. Records are queried by `userId` (partition key = email address) and sorted by `searchedAt`.
+
+## Runtime
+
+Both Lambda functions run on **Node.js 24** (`nodejs24.x`).
+
+---
+
+# Security Features Implemented
+
+The following security controls are active in the current deployment — not future work.
+
+## API Gateway Throttling
+
+A rate limit is enforced at the API Gateway stage level across all endpoints:
+
+- **Steady-state:** 10 requests per second
+- **Burst cap:** 20 concurrent requests (token-bucket)
+
+Any client exceeding this receives `HTTP 429 Too Many Requests` automatically. This is configured via `MethodSettings` on the `NimoApi` resource in `infra/template.yaml`.
+
+## Least-Privilege IAM
+
+Each Lambda has a minimal inline IAM policy scoped to the exact table ARN:
+
+| Function | Permissions granted |
+|----------|-------------------|
+| `PriceFunction` | `dynamodb:PutItem` only |
+| `HistoryFunction` | `dynamodb:Query` only |
+
+Neither function can scan, delete, or describe the table.
+
+## DynamoDB Encryption at Rest
+
+The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS key. Encryption is explicitly declared in the template rather than relying on the silent default.
+
+## Input Validation
+
+All incoming query parameters are validated with Zod before reaching business logic. Invalid or missing parameters return a structured `400 ValidationError` — no raw errors are exposed to the caller.
+
+---
+
+# Future Enhancements
+
+## Email Notifications via SQS (Async)
+
+Email sending is architecturally planned but not yet implemented. The intended design:
+
+1. After saving the search to DynamoDB, `PriceFunction` publishes an event to an SQS queue (or EventBridge).
+2. A separate `EmailWorkerLambda` consumes the queue and sends the email via AWS SES.
+3. The API response is never blocked waiting for the email — it returns immediately after the DynamoDB write.
+
+**Idempotency:** To avoid sending duplicate emails for repeated searches of the same cryptocurrency, the email worker will check whether a notification was already sent for the same `(userId, coin, date)` combination before dispatching. This can be enforced with a DynamoDB conditional write on a separate `EmailsSent` tracking table, or by using SQS message deduplication IDs on a FIFO queue.
+
+## API Key Authentication
+
+The API is currently public with only throttling as a guard. For production, API Gateway usage plans and API keys would be added:
+
+- Each consumer (client application or partner) receives a unique API key.
+- Usage plans set per-key rate limits and quotas independently of the global throttle.
+- The `x-api-key` header is required on every request; missing or invalid keys return `HTTP 403`.
+- This allows auditing per-client usage and revoking individual keys without affecting others.
+
+No Cognito or JWT-based auth is needed for this use case — API keys are sufficient for server-to-server access control on a public data API.
+
+## Distributed Databases per Microservice
+
+Currently both services share the single `CryptoSearchHistory` table. In a production microservice architecture each service should own its own data store independently.
+
+**Proposed setup:**
+
+| Service | Owns | Access |
+|---------|------|--------|
+| `crypto-price-service` | `PriceWriteTable` | Write-only |
+| `search-history-service` | `HistoryReadTable` | Read-only |
+
+**Synchronization strategy — DynamoDB Streams:**
+
+```
+PriceFunction writes → PriceWriteTable
+                              ↓
+                    DynamoDB Stream (new image)
+                              ↓
+                    SyncLambda (triggered by stream)
+                              ↓
+                    HistoryReadTable (eventual consistency)
+```
+
+- `PriceWriteTable` enables a DynamoDB Stream on `NEW_IMAGE`.
+- A lightweight `SyncLambda` consumes the stream and writes the record into `HistoryReadTable`.
+- `search-history-service` only ever reads from its own table — it has no knowledge of the write side.
+- This pattern is **eventually consistent**: history may lag by milliseconds but the write API is never blocked.
+- Failures in the sync are handled via a Dead Letter Queue (DLQ) on the stream consumer — no data is lost.
+
+## Test Coverage
+
+Test coverage is intentionally minimal for this take-home. The target for a production version would be:
+
+| Layer | Test type | Coverage goal |
+|-------|-----------|--------------|
+| Validators | Unit (Zod schema edge cases) | 100% |
+| Services | Unit (mock repository) | 100% |
+| Repositories | Integration (DynamoDB Local) | Key paths |
+| Handlers | Integration (SAM local invoke) | Happy path + error cases |
+| End-to-end | E2E via `sam local start-api` | Critical flows |
+
+Priority test cases:
+- Missing required query parameters → 400
+- Invalid email format → 400
+- DynamoDB unavailable → 502 (not 500)
+- Empty history (new user) → 200 with `count: 0`
+- Results are returned newest-first

@@ -1,5 +1,6 @@
 import { getCoinPrice } from '#src/clients/coinGeckoClient.js';
-import { saveSearchHistory } from '#src/repositories/historyRepository.js';
+import { saveSearchHistory, findRecentSearch } from '#src/repositories/historyRepository.js';
+import { emailNotificationService } from '#src/services/emailNotificationService.js';
 import { logger } from '#src/shared/index.js';
 
 
@@ -11,8 +12,11 @@ import { logger } from '#src/shared/index.js';
  * 2. Persist the search history to DynamoDB.
  * 3. Return the price result to the API handler.
  *
- * Email notification will be added later as a separate asynchronous step.
+ * Email notification will be send if the user has not received a notification for the same coin and currency in the last 5 minutes.
  */
+
+const EMAIL_DEDUP_WINDOW_MINUTES = 5;
+
 export async function savePriceHistoryService(input) {
   const { coin, email, currency } = input;
 
@@ -29,6 +33,17 @@ export async function savePriceHistoryService(input) {
     searchedAt: email
   });
 
+  const fiveMinutesAgo = new Date(
+    Date.now() - EMAIL_DEDUP_WINDOW_MINUTES * 60 * 1000
+  ).toISOString();
+
+  const recentSearch = await findRecentSearch({
+    userId: email,
+    coin: priceResult.coin,
+    currency: priceResult.currency,
+    since: fiveMinutesAgo
+  });
+
   const historyRecord = await saveSearchHistory({
     userId: email,
     email,
@@ -42,7 +57,26 @@ export async function savePriceHistoryService(input) {
     coin: priceResult.coin,
     searchedAt: historyRecord.searchedAt
   });
- //Send email here to notify the user about the price lookup. This will be implemented in a future iteration.
+  // Fire-and-forget: SES failure must never block or fail the price response.
+
+   if (!recentSearch) {
+    console.log('now sending email')
+    emailNotificationService.send({
+      userId: email,
+      coin: priceResult.coin,
+      currency: priceResult.currency,
+      price: priceResult.price,
+      searchedAt: historyRecord.searchedAt
+    }).catch(err => logger.warn('Email notification failed — continuing.', { err }));
+  } else {
+     console.log('just now send  email')
+      logger.info('Skipping duplicate email notification.', {
+        userId: email,
+        coin: priceResult.coin,
+        currency: priceResult.currency,
+        dedupWindowMinutes: EMAIL_DEDUP_WINDOW_MINUTES
+      });
+  }
   return {
     coin: priceResult.coin,
     currency: priceResult.currency,
