@@ -4,6 +4,7 @@ import { getHistoryService } from '#src/services/historyService.js';
 
 export const handler = async (event, context) => {
   try {
+    console.log('Received event:',process.env.DYNAMODB_ENDPOINT);
     const input = validateHistoryRequest(event.queryStringParameters ?? {});
     const result = await getHistoryService(input);
     return successResponse(200, result);

@@ -22,6 +22,8 @@ import { savePriceHistoryService } from '#src/services/priceService.js';
  */
 export const handler = async (event, context) => {
   try {
+        console.log('Checked event:',process.env.DYNAMODB_ENDPOINT);
+
     //Valdaites the incoming request query parameters
     const input = validatePriceRequest(event.queryStringParameters ?? {});
     // Retrieves the latest cryptocurrency price from the serv
