@@ -33,25 +33,26 @@ Resources:
           ThrottlingBurstLimit: 20  # token-bucket burst cap
 
   # ──────────────────────────────────────────────
-  # Local dev policy — grants Nima-api user the same DynamoDB
-  # permissions needed for sam local testing.
-  # Does NOT apply in production (Lambda uses its own execution role).
+  # Local dev policy — commented out for CI/CD deployment.
+  # Attach this manually in IAM console when setting up a new local dev machine.
+  # Lambda functions use their own execution roles defined below — this policy
+  # only grants sam local access to the DynamoDB table for the named IAM user.
   # ──────────────────────────────────────────────
-  LocalDevDynamoDBPolicy:
-    Type: AWS::IAM::Policy
-    Properties:
-      PolicyName: NimaApiDynamoDBLocalDev
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Action:
-              - dynamodb:PutItem  # needed by sam local PriceFunction
-              - dynamodb:Query    # needed by sam local HistoryFunction
-            Resource: !GetAtt CryptoSearchHistoryTable.Arn
-      Users:
-        - Nima-api
-        
+  # LocalDevDynamoDBPolicy:
+  #   Type: AWS::IAM::Policy
+  #   Properties:
+  #     PolicyName: NimaApiDynamoDBLocalDev
+  #     PolicyDocument:
+  #       Version: '2012-10-17'
+  #       Statement:
+  #         - Effect: Allow
+  #           Action:
+  #             - dynamodb:PutItem  # needed by sam local PriceFunction
+  #             - dynamodb:Query    # needed by sam local HistoryFunction
+  #           Resource: !GetAtt CryptoSearchHistoryTable.Arn
+  #     Users:
+  #       - Nima-api
+
 
 
   # ──────────────────────────────────────────────
