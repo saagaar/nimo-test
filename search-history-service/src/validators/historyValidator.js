@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ValidationError } from '#src/shared/index.js';
 
 const schema = z.object({
-  userId: z.string().email('A valid email address is required')
+  email: z.string().email('A valid email address is required')
 });
 
 export function validateHistoryRequest(query) {

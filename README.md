@@ -120,7 +120,7 @@ Response:
 
 ### Get Search History
 
-GET /history?userId=123
+GET /history?email=user@example.com
 
 Response:
 {
@@ -314,14 +314,12 @@ GET /history
 
 | Parameter | Type   | Required | Description                                         |
 | --------- | ------ | -------- | --------------------------------------------------- |
-| userId    | string | Yes      | User identifier used as the DynamoDB partition key. |
-
-> If your implementation uses the user's email as the partition key, replace `userId` with `email`.
+| email     | string | Yes      | Email address used to look up the user's search history. |
 
 ### Example Request
 
 ```http
-GET /history?userId=user@example.com
+GET /history?email=user@example.com
 ```
 
 ### Successful Response
