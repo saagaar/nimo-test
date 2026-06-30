@@ -3,18 +3,18 @@ import { validateHistoryRequest } from '#src/validators/historyValidator.js';
 import { ValidationError } from '#src/shared/index.js';
 
 describe('validateHistoryRequest', () => {
-  it('throws ValidationError when userId is missing', () => {
+  it('throws ValidationError when email is missing', () => {
     expect(() => validateHistoryRequest({})).toThrow(ValidationError);
   });
 
   it('throws ValidationError for invalid email format', () => {
     expect(() =>
-      validateHistoryRequest({ userId: 'not-an-email' })
+      validateHistoryRequest({ email: 'not-an-email' })
     ).toThrow(ValidationError);
   });
 
   it('returns parsed data for a valid email', () => {
-    const result = validateHistoryRequest({ userId: 'user@example.com' });
-    expect(result).toEqual({ userId: 'user@example.com' });
+    const result = validateHistoryRequest({ email: 'user@example.com' });
+    expect(result).toEqual({ email: 'user@example.com' });
   });
 });
