@@ -27,11 +27,6 @@ export async function savePriceHistoryService(input) {
   });
   
   const priceResult = await getCoinPrice(coin);
-  logger.info('Search history saved successfully.', {
-    userId: email,
-    coin: priceResult.coin,
-    searchedAt: email
-  });
 
   const fiveMinutesAgo = new Date(
     Date.now() - EMAIL_DEDUP_WINDOW_MINUTES * 60 * 1000
@@ -69,8 +64,7 @@ export async function savePriceHistoryService(input) {
       searchedAt: historyRecord.searchedAt
     }).catch(err => logger.warn('Email notification failed — continuing.', { err }));
   } else {
-     console.log('just now send  email')
-      logger.info('Skipping duplicate email notification.', {
+    logger.info('Skipping duplicate email notification.', {
         userId: email,
         coin: priceResult.coin,
         currency: priceResult.currency,

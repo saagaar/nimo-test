@@ -9,6 +9,7 @@ Serverless AWS application that fetches real-time cryptocurrency prices, records
 - [Architecture](#architecture)
 - [Project Structure](#project-structure)
 - [Tech Stack](#tech-stack)
+- [How It Works](#how-it-works)
 - [API Reference](#api-reference)
 - [Email Notifications](#email-notifications)
 - [Security](#security)
@@ -48,6 +49,8 @@ Both functions are stateless and independently deployable. The email call is fir
 ```
 nimo-test/
 ├── crypto-price-service/       # Lambda: GET /price
+│   ├── scripts/
+│   │   └── test-email.js       # SES smoke test — verify email sending in isolation
 │   └── src/
 │       ├── handlers/           # Lambda entry point (thin — parse, call service, respond)
 │       ├── services/           # Business logic (price lookup, dedup check, email trigger)
@@ -72,6 +75,7 @@ nimo-test/
 │   └── openapi.yaml            # OpenAPI 3.0 spec
 ├── infra/
 │   └── template.yaml           # AWS SAM template (Lambda, API Gateway, DynamoDB)
+├── env.local.json              # Local env vars for sam local start-api (not committed)
 ├── .github/
 │   └── workflows/
 │       └── ci-cd.yml           # GitHub Actions CI/CD pipeline
@@ -102,6 +106,48 @@ Each service has its own `package.json` for **production dependencies only**. De
 | CI/CD | GitHub Actions |
 | Linting | ESLint + Prettier |
 | Commits | Conventional Commits (commitlint + Husky) |
+
+---
+
+## How It Works
+
+### GET /price — full request flow
+
+```
+handler (price.js)
+  └── validatePriceRequest()          Zod: coin (string), email (valid email)
+  └── savePriceHistoryService()
+        ├── getCoinPrice(coin)         CoinGecko REST API → { coin, currency, price }
+        ├── findRecentSearch(...)      DynamoDB Query: same userId+coin within 5 min
+        ├── saveSearchHistory(...)     DynamoDB PutItem: writes the record, returns searchedAt
+        └── if no recent search:
+              emailNotificationService.send(...)   fire-and-forget (.catch → warn log)
+  └── respond 200 { coin, currency, price, searchedAt }
+```
+
+**Key detail — dedup before write:** `findRecentSearch` runs before `saveSearchHistory`. The dedup check reads the state before the current request is persisted, so a concurrent duplicate request within milliseconds could result in two emails being sent. This is an acceptable edge case for a notification system (two emails is better than a missed write).
+
+### GET /history — full request flow
+
+```
+handler (getHistory.js)
+  └── validateHistoryRequest()        Zod: email (valid email)
+  └── getHistoryService({ email })
+        └── getSearchHistory(email)   DynamoDB Query: userId = email, ScanIndexForward: false
+  └── respond 200 { items: [...], count: N }
+```
+
+### Layer responsibilities
+
+| Layer | Responsibility | Example files |
+|-------|---------------|---------------|
+| `handlers/` | Parse event, call service, map to HTTP response | `price.js`, `getHistory.js` |
+| `services/` | Orchestrate the use case — no AWS SDK calls | `priceService.js`, `historyService.js` |
+| `repositories/` | DynamoDB access only | `historyRepository.js` (both services) |
+| `clients/` | External API / AWS SDK wrappers | `coinGeckoClient.js`, `sesClient.js`, `dynamoDbClient.js` |
+| `validators/` | Zod schemas, throw `ValidationError` on bad input | `priceValidator.js`, `historyValidator.js` |
+| `config/` | Read environment variables, single source of truth | `config/index.js` |
+| `shared/` | Logger, error classes, response builder | `logger.js`, `errors.js`, `response.js` |
 
 ---
 
@@ -217,16 +263,62 @@ Returns `{ "items": [], "count": 0 }` for users with no history.
 
 Every successful `/price` request triggers an email to the requesting user via AWS SES. The call is fire-and-forget — it runs after the DynamoDB write and never blocks or delays the API response. SES failures are logged as warnings; the price response always returns 200.
 
+### Email delivery flow
+
+```
+priceService.js
+  ↓
+emailNotificationService.send(...)     formats subject + plain-text body
+  ↓
+sesClient.sendEmail(...)               calls AWS SDK SendEmailCommand
+  ↓
+SES                                    delivers to inbox
+```
+
+`sesClient.js` reads the sender address from `config.emailFromAddress` (the `EMAIL_FROM_ADDRESS` environment variable). The address must be verified in SES before emails are delivered.
+
 ### Deduplication (5-minute window)
 
 To prevent spam, at most one email is sent per `(email, coin)` pair within any 5-minute window. Before sending, the service queries DynamoDB for a recent search by the same user for the same coin. If one exists within the window, the email is skipped.
 
 ```
-User searches bitcoin        → email sent ✓
-User searches bitcoin 2 min later → skipped (within 5-min window)
-User searches ethereum same time  → email sent ✓ (different coin)
-User searches bitcoin 6 min later → email sent ✓ (window expired)
+priceService.js — EMAIL_DEDUP_WINDOW_MINUTES = 5
+
+fiveMinutesAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString()
+
+findRecentSearch({
+  userId: email,
+  coin,
+  currency,
+  since: fiveMinutesAgo      ← KeyConditionExpression: searchedAt >= :since
+})
+
+if (recentSearch)  → skip email, log info
+else               → fire-and-forget send
 ```
+
+Example behaviour:
+
+```
+User searches bitcoin              → email sent ✓
+User searches bitcoin 2 min later  → skipped (within 5-min window)
+User searches ethereum same time   → email sent ✓ (different coin)
+User searches bitcoin 6 min later  → email sent ✓ (window expired)
+```
+
+**Why DynamoDB instead of in-memory?** A Lambda execution environment can be recycled or scaled to multiple instances. An in-memory `Map` resets on cold start and is not shared across instances. DynamoDB-backed dedup is reliable across all invocations.
+
+### SES smoke test
+
+To verify SES credentials and identity verification independently of the Lambda:
+
+```bash
+AWS_REGION=ap-southeast-2 \
+EMAIL_FROM_ADDRESS=your-verified@email.com \
+node crypto-price-service/scripts/test-email.js recipient@example.com
+```
+
+The script (`crypto-price-service/scripts/test-email.js`) sends a single email directly via the SDK, bypassing the notification service and dedup logic. It prints specific guidance for `MessageRejected`, `AccessDeniedException`, and `MailFromDomainNotVerifiedException` errors.
 
 ### Future: SQS-based decoupled email
 
@@ -234,15 +326,13 @@ The current design calls SES synchronously (fire-and-forget) from inside the Lam
 
 1. `PriceFunction` publishes a message to an SQS FIFO queue after the DynamoDB write.
 2. A dedicated `EmailWorkerLambda` consumes the queue and calls SES.
-3. SQS message deduplication IDs replace the DynamoDB lookup for dedup.
+3. SQS message deduplication IDs replace the DynamoDB query for dedup.
 
-Only one line in `priceService.js` changes when this is implemented — the `EmailNotificationService` class and its callers remain untouched.
+Benefits: Lambda response time is unaffected even if SES is slow, retries and backoff are handled by SQS, and a Dead Letter Queue (DLQ) captures failed sends for later inspection. Only one line in `priceService.js` changes when this is implemented.
 
 ---
 
 ## Security
-
-The following controls are active in the current deployment.
 
 ### Least-privilege IAM
 
@@ -253,7 +343,7 @@ Each Lambda has a minimal inline policy scoped to the exact DynamoDB table ARN:
 | `PriceFunction` | `dynamodb:PutItem` only |
 | `HistoryFunction` | `dynamodb:Query` only |
 
-`PriceFunction` also has `ses:SendEmail` scoped to verified SES identities in the account (`arn:aws:ses:region:account:identity/*`) — not a wildcard.
+`PriceFunction` also has `ses:SendEmail` scoped to verified SES identities in the account (`arn:aws:ses:region:account:identity/*`) — not a wildcard resource.
 
 ### API Gateway throttling
 
@@ -266,7 +356,7 @@ Clients exceeding the limit receive `HTTP 429` automatically.
 
 ### DynamoDB encryption at rest
 
-The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS key. This is explicitly declared in the SAM template rather than relying on the silent default.
+The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS key. Explicitly declared in the SAM template rather than relying on the default.
 
 ### Input validation
 
@@ -274,7 +364,7 @@ All query parameters are validated with Zod before reaching business logic. Inva
 
 ### No secrets in code
 
-`EMAIL_FROM_ADDRESS` is a SAM parameter injected at deploy time via a GitHub Secret. AWS credentials are never stored in the repository.
+`EMAIL_FROM_ADDRESS` is a SAM parameter (`Parameters: EmailFromAddress`) injected at deploy time via a GitHub Secret (`--parameter-overrides EmailFromAddress=${{ secrets.EMAIL_FROM_ADDRESS }}`). AWS credentials are never stored in the repository.
 
 ---
 
@@ -289,9 +379,11 @@ All query parameters are validated with Zod before reaching business logic. Inva
 | `coin` | String | Cryptocurrency identifier |
 | `currency` | String | Fiat currency code |
 | `price` | Number | Price at time of search |
-| `email` | String | Email address (redundant with `userId`, kept for readability) |
+| `email` | String | Email address (same value as `userId`, kept for readability) |
 
 Records are queried by `userId` and sorted by `searchedAt` descending (`ScanIndexForward: false`) — no additional index needed.
+
+The `findRecentSearch` function uses `KeyConditionExpression: 'userId = :userId AND searchedAt >= :since'` with a `FilterExpression` on `coin` and `currency`. This leverages the sort key range directly rather than requiring a Global Secondary Index.
 
 ---
 
@@ -303,7 +395,6 @@ Records are queried by `userId` and sorted by `searchedAt` descending (`ScanInde
 - AWS CLI configured
 - AWS SAM CLI
 - Docker (for DynamoDB Local)
-- DynamoDB Local running on port 8000
 
 ### Setup
 
@@ -322,11 +413,19 @@ cd ../search-history-service && npm install
 # Start DynamoDB Local (Docker)
 docker run -p 8000:8000 amazon/dynamodb-local
 
-# Start both Lambdas via SAM (Terminal 1)
+# Start both Lambdas via SAM
 sam local start-api -t infra/template.yaml --env-vars env.local.json
 ```
 
 `env.local.json` supplies `HISTORY_TABLE_NAME`, `DYNAMODB_ENDPOINT`, `AWS_REGION`, and `EMAIL_FROM_ADDRESS` to each function without touching the SAM template.
+
+```bash
+# Test price endpoint
+curl "http://localhost:3000/price?coin=bitcoin&email=user@example.com"
+
+# Test history endpoint
+curl "http://localhost:3000/history?email=user@example.com"
+```
 
 ### Linting and formatting
 
@@ -348,7 +447,7 @@ npm run test:price    # crypto-price-service only
 npm run test:history  # search-history-service only
 ```
 
-No AWS credentials or running services required.
+No AWS credentials or running services required. Each service has its own `vitest.config.js` with `root: __dirname` to correctly resolve the `#src` path alias from each service directory.
 
 ### Test coverage (18 tests)
 
@@ -359,32 +458,32 @@ No AWS credentials or running services required.
 | 1 | Missing `coin` → `ValidationError` | price |
 | 2 | Missing `email` → `ValidationError` | price |
 | 3 | Invalid email format → `ValidationError` | price |
-| 4 | Valid input → returns parsed data | price |
+| 4 | Valid `coin` + `email` → returns parsed data | price |
 | 5 | Missing `email` → `ValidationError` | history |
 | 6 | Invalid email format → `ValidationError` | history |
-| 7 | Valid email → returns parsed data | history |
+| 7 | Valid email → returns `{ email }` | history |
 
 #### priceService — business logic, mocked dependencies
 
 | # | Scenario | Assert |
 |---|----------|--------|
-| 8 | No recent search → email IS sent | `emailNotificationService.send` called |
+| 8 | No recent search → email IS sent | `emailNotificationService.send` called once with correct args |
 | 9 | Recent search within 5 min → email skipped | `emailNotificationService.send` NOT called |
-| 10 | `getCoinPrice` throws | error propagates; `saveSearchHistory` never called |
-| 11 | `saveSearchHistory` throws | error propagates to handler |
-| 12 | Dedup window wiring | `findRecentSearch` receives `since` ≈ `now − 5 min` |
+| 10 | `getCoinPrice` throws `ExternalServiceError` | error propagates; `saveSearchHistory` never called |
+| 11 | `saveSearchHistory` throws `ExternalServiceError` | error propagates to handler |
+| 12 | Dedup window wiring | `findRecentSearch` receives `since` within `±1s` of `now − 5min` |
 
-Test #12 is the key invariant — it proves the dedup window is correctly wired, not just that the branch exists.
+Test #12 is the key invariant — it proves the 5-minute dedup timestamp is computed and passed correctly, not just that the branch exists.
 
 #### Handlers — HTTP contract, mocked service layer
 
 | # | Scenario | Status |
 |---|----------|--------|
 | 13 | `queryStringParameters: null` | 400 (no crash) |
-| 14 | `ValidationError` | 400 |
-| 15 | `ExternalServiceError` | 502 |
-| 16 | Success | 200 |
-| 17 | Missing `email` | 400 |
+| 14 | `ValidationError` from validator | 400 |
+| 15 | `ExternalServiceError` from service | 502 |
+| 16 | Success | 200 with correct price data |
+| 17 | Missing `email` in history request | 400 |
 | 18 | Empty history (new user) | 200 with `{ items: [], count: 0 }` |
 
 ### Intentionally deferred
@@ -393,7 +492,7 @@ Test #12 is the key invariant — it proves the dedup window is correctly wired,
 |-------|--------|
 | `historyRepository.js` | Requires DynamoDB Local — valuable integration test, out of scope for take-home |
 | `coinGeckoClient.js` | Fetch mocking adds noise for low value at this stage |
-| `sesClient.js` / `emailNotificationService.js` | Thin wrappers; covered indirectly via service tests |
+| `sesClient.js` / `emailNotificationService.js` | Thin wrappers; covered indirectly via service-layer mocks |
 | End-to-end | `sam local start-api` manual verification is sufficient |
 
 ---
@@ -414,8 +513,8 @@ Every push / PR to any branch
 Push to main (after ci passes)
         ↓
     deploy job
-    ├── sam build
-    └── sam deploy
+    ├── sam build -t infra/template.yaml
+    └── sam deploy (--resolve-s3, --parameter-overrides EmailFromAddress=...)
 ```
 
 ### GitHub Secrets required
@@ -431,6 +530,16 @@ The deployment user needs CloudFormation, Lambda, DynamoDB, IAM, SES, and S3 per
 ---
 
 ## Deployment
+
+### SES prerequisite
+
+Before deploying, verify your sender email in the SES console:
+
+```
+SES Console → Verified identities → Create identity → Email address
+```
+
+In SES sandbox mode, the recipient address must also be verified. Request production access to send to any address.
 
 ### First-time deploy (guided)
 
@@ -464,22 +573,27 @@ aws cloudformation describe-stacks \
   --output text
 ```
 
-> **SES sandbox:** If your AWS account is in SES sandbox mode, both the sender and recipient email addresses must be verified in the SES console before emails will be delivered.
-
 ---
 
 ## Future Enhancements
 
 ### 1. SQS-based async email worker
 
-Replace the in-Lambda SES call with an SQS publish. A dedicated `EmailWorkerLambda` processes the queue. Benefits: Lambda response time is unaffected even if SES is slow, retries are handled by SQS, and a Dead Letter Queue (DLQ) catches failed sends for later inspection. Only `priceService.js` changes — one line.
+Replace the in-Lambda SES call with an SQS FIFO queue publish. A dedicated `EmailWorkerLambda` consumes the queue and calls SES. Benefits:
+
+- Lambda response time is unaffected even if SES is slow
+- Built-in retry and backoff via SQS visibility timeout
+- Dead Letter Queue (DLQ) captures failed sends for inspection
+- SQS FIFO deduplication IDs replace the DynamoDB `findRecentSearch` query
+
+Only `priceService.js` changes — the `EmailNotificationService` class and all callers remain untouched.
 
 ### 2. API Key authentication
 
 The API is currently public, protected only by throttling. Adding API Gateway usage plans and API keys would allow:
 
 - Per-consumer rate limits and quotas independent of the global throttle
-- Auditing of per-key usage
+- Auditing of per-key usage in CloudWatch
 - Key revocation without affecting other consumers
 
 The `x-api-key` header would be required on all requests; missing or invalid keys return `HTTP 403`. No Cognito or JWT overhead needed for a server-to-server API.
@@ -509,17 +623,22 @@ Sync failures are caught by a DLQ on the stream consumer — no data loss.
 
 ### 4. Repository integration tests
 
-The `historyRepository.js` layer is currently untested because it requires DynamoDB Local. Priority test cases when added:
+The `historyRepository.js` layer is currently untested because it requires DynamoDB Local. Priority test cases:
 
 - `findRecentSearch` returns `null` for a new user
 - `findRecentSearch` returns a record for a recent same-coin search
-- `saveSearchHistory` writes the correct attributes
+- `findRecentSearch` returns nothing for a search just outside the 5-minute window
+- `saveSearchHistory` writes all attributes correctly
 - Results are returned newest-first
 
 ### 5. Observability
 
-- Structured logs already use a consistent JSON format with `level`, `timestamp`, `message`, and `metadata` fields — ready to ship to CloudWatch Insights.
-- Future: add CloudWatch alarms on Lambda error rate and P99 duration, an X-Ray trace per request, and a dashboard for the CoinGecko error rate and email send rate.
+- Structured logs already use a consistent JSON format with `level`, `timestamp`, `message`, and `metadata` fields — ready to query in CloudWatch Insights.
+- Future: CloudWatch alarms on Lambda error rate and P99 duration, X-Ray traces per request, and a dashboard for CoinGecko error rate and SES send/skip counts.
+
+### 6. Pagination for history
+
+The `/history` endpoint returns all records for a user. For users with many searches, add `limit` and `cursor` query parameters backed by DynamoDB's `ExclusiveStartKey` for cursor-based pagination — no full-table scans needed.
 
 ---
 
@@ -531,10 +650,13 @@ The `historyRepository.js` layer is currently untested because it requires Dynam
 | Zod for validation | Declarative schemas, typed output, first-class ESM support |
 | Fire-and-forget email | SES latency should never add to the price API response time |
 | DynamoDB dedup query instead of in-memory Map | Survives Lambda cold starts and scales across concurrent instances; in-memory state resets on cold start |
-| Shared `package.json` for dev tooling | Single ESLint/Prettier/Husky config; no duplication across services |
+| Dedup check before write | Reads state before persisting so the check is clean; acceptable edge case: two near-simultaneous requests may both send an email |
+| `userId` as partition key (stores email) | Matches DynamoDB convention for user-scoped data; `email` attribute kept alongside for readability |
+| Shared `package.json` for dev tooling | Single ESLint/Prettier/Husky/Vitest config; no duplication across services |
 | `sam validate --lint` in CI | Catches CloudFormation errors before any AWS API call is made |
 | `--resolve-s3` in SAM deploy | No manual S3 bucket management; SAM handles the artifact bucket lifecycle |
 | `PAY_PER_REQUEST` DynamoDB billing | No capacity planning needed; scales to zero at rest |
+| `EmailFromAddress` as SAM parameter | Keeps secrets out of the template; injected via GitHub Secret at deploy time |
 
 ---
 

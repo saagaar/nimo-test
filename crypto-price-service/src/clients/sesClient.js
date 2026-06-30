@@ -10,16 +10,16 @@ export const sesClient = {
   async sendEmail({ to, subject, body }) {
       logger.info('Ready to send email via SES.', { to, subject })
    try{
-    await client.send(
-      new SendEmailCommand({
-        Source:  'saagarchapagain@gmail.com',
-        Destination: { ToAddresses: [to] },
-        Message: {
-          Subject: { Data: subject },
-          Body: { Text: { Data: body } }
-        }
-      })
-    );
+      await client.send(
+        new SendEmailCommand({
+          Source: config.emailFromAddress,
+          Destination: { ToAddresses: [to] },
+          Message: {
+            Subject: { Data: subject },
+            Body: { Text: { Data: body } }
+          }
+        })
+      );
       logger.info('Email sent via SES.', { to, subject })
     } 
     catch (error) {
@@ -29,6 +29,6 @@ export const sesClient = {
         name: error.name,
         metadata: error.$metadata
       });
-      }
+    }
   }
 }
