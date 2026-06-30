@@ -26,7 +26,6 @@ Serverless AWS application that fetches real-time cryptocurrency prices, records
 ## Architecture
 
 Two Lambda functions sit behind a single API Gateway. They share one DynamoDB table — price service writes, history service reads.
-
 ```
 Client
   ↓
@@ -39,7 +38,6 @@ API Gateway  (throttled: 10 req/s steady, 20 burst)
   └── GET /history  →  HistoryFunction (Lambda)
                          └── DynamoDB          (read search records)
 ```
-
 Both functions are stateless and independently deployable. The email call is fire-and-forget — SES failures never affect the price API response.
 
 ---
@@ -70,7 +68,6 @@ nimo-test/
 │       ├── shared/
 │       └── config/
 │
-├── shared/                     # Cross-service constants and utilities
 ├── docs/
 │   └── openapi.yaml            # OpenAPI 3.0 spec
 ├── infra/
@@ -177,7 +174,7 @@ Fetches the current price of a cryptocurrency, records the search in DynamoDB, a
 **Example**
 
 ```bash
-curl "https://<api-url>/Prod/price?coin=bitcoin&email=user@example.com"
+curl "https://(https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/price?coin=bitcoin&email=user@example.com"
 ```
 
 **200 Response**
@@ -252,7 +249,6 @@ Returns `{ "items": [], "count": 0 }` for users with no history.
   }
 }
 ```
-
 ---
 
 ## Email Notifications
@@ -316,15 +312,6 @@ node crypto-price-service/scripts/test-email.js recipient@example.com
 
 The script (`crypto-price-service/scripts/test-email.js`) sends a single email directly via the SDK, bypassing the notification service and dedup logic. It prints specific guidance for `MessageRejected`, `AccessDeniedException`, and `MailFromDomainNotVerifiedException` errors.
 
-### Future: SQS-based decoupled email
-
-The current design calls SES synchronously (fire-and-forget) from inside the Lambda. The planned upgrade decouples this entirely:
-
-1. `PriceFunction` publishes a message to an SQS FIFO queue after the DynamoDB write.
-2. A dedicated `EmailWorkerLambda` consumes the queue and calls SES.
-3. SQS message deduplication IDs replace the DynamoDB query for dedup.
-
-Benefits: Lambda response time is unaffected even if SES is slow, retries and backoff are handled by SQS, and a Dead Letter Queue (DLQ) captures failed sends for later inspection. Only one line in `priceService.js` changes when this is implemented.
 
 ---
 
@@ -358,9 +345,6 @@ The `CryptoSearchHistory` table has `SSEEnabled: true` with an AWS-managed KMS k
 
 All query parameters are validated with Zod before reaching business logic. Invalid or missing parameters return a structured `400 ValidationError`. No raw error details or stack traces are exposed to the caller.
 
-### No secrets in code
-
-`EMAIL_FROM_ADDRESS` is a SAM parameter (`Parameters: EmailFromAddress`) injected at deploy time via a GitHub Secret (`--parameter-overrides EmailFromAddress=${{ secrets.EMAIL_FROM_ADDRESS }}`). AWS credentials are never stored in the repository.
 
 ---
 
@@ -417,10 +401,10 @@ sam local start-api -t infra/template.yaml --env-vars env.local.json
 
 ```bash
 # Test price endpoint
-curl "http://localhost:3000/price?coin=bitcoin&email=user@example.com"
+curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/price?coin=bitcoin&email=user@example.com"
 
 # Test history endpoint
-curl "http://localhost:3000/history?email=user@example.com"
+curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/history?email=user@example.com"
 ```
 
 ### Linting and formatting
@@ -430,7 +414,6 @@ npm run lint          # ESLint across both services
 npm run lint:fix      # Auto-fix
 npm run format        # Prettier across both services
 ```
-
 ---
 
 ## Testing
@@ -544,7 +527,6 @@ sam build -t infra/template.yaml
 sam deploy --guided \
   --parameter-overrides EmailFromAddress=your-verified@email.com
 ```
-
 ### Subsequent deploys
 
 ```bash
@@ -558,7 +540,6 @@ sam deploy \
   --resolve-s3 \
   --parameter-overrides EmailFromAddress=your-verified@email.com
 ```
-
 After deploy, retrieve the API URL:
 
 ```bash
@@ -568,7 +549,6 @@ aws cloudformation describe-stacks \
   --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
   --output text
 ```
-
 ---
 
 ## Future Enhancements
@@ -617,15 +597,6 @@ PriceFunction writes → PriceWriteTable
 
 Sync failures are caught by a DLQ on the stream consumer — no data loss.
 
-### 4. Repository integration tests
-
-The `historyRepository.js` layer is currently untested because it requires DynamoDB Local. Priority test cases:
-
-- `findRecentSearch` returns `null` for a new user
-- `findRecentSearch` returns a record for a recent same-coin search
-- `findRecentSearch` returns nothing for a search just outside the 5-minute window
-- `saveSearchHistory` writes all attributes correctly
-- Results are returned newest-first
 
 ### 5. Observability
 
@@ -645,7 +616,7 @@ The `/history` endpoint returns all records for a user. For users with many sear
 | CommonJS → ESM (`"type": "module"`) | Native Node.js 24 module format; no transpile step; enables top-level `await` |
 | Zod for validation | Declarative schemas, typed output, first-class ESM support |
 | Fire-and-forget email | SES latency should never add to the price API response time |
-| DynamoDB dedup query instead of in-memory Map | Survives Lambda cold starts and scales across concurrent instances; in-memory state resets on cold start |
+| DynamoDB dedup query instead of in-memory Map | Survives Lambda cold starts and scales across concurrent instances; in-memory state resets on cold start |  
 | Dedup check before write | Reads state before persisting so the check is clean; acceptable edge case: two near-simultaneous requests may both send an email |
 | `userId` as partition key (stores email) | Matches DynamoDB convention for user-scoped data; `email` attribute kept alongside for readability |
 | Shared `package.json` for dev tooling | Single ESLint/Prettier/Husky/Vitest config; no duplication across services |
@@ -658,4 +629,4 @@ The `/history` endpoint returns all records for a user. For users with many sear
 
 ## Author
 
-Built as a serverless AWS engineering exercise by Sagar.
+Built by Sagar Chapagain.
