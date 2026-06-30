@@ -9,7 +9,7 @@ const client = new SESClient({ region: config.awsRegion });
 export const sesClient = {
   async sendEmail({ to, subject, body }) {
       logger.info('Ready to send email via SES.', { to, subject })
-   
+   try{
     await client.send(
       new SendEmailCommand({
         Source:  'saagarchapagain@gmail.com',
@@ -21,6 +21,14 @@ export const sesClient = {
       })
     );
       logger.info('Email sent via SES.', { to, subject })
-
+    } 
+    catch (error) {
+      logger.error('Some error Occured Failed to send email.', {
+        to,
+        error: error.message,
+        name: error.name,
+        metadata: error.$metadata
+      });
+      }
   }
-};
+}
