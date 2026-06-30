@@ -6,5 +6,5 @@ export default {
   // regional endpoint automatically. A hardcoded fallback (e.g. host.docker.internal)
   // would silently misdirect traffic in production.
 
-  dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT??"http://host.docker.internal:8000"
+  dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT
 }

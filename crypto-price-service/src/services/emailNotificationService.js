@@ -29,7 +29,11 @@ export class EmailNotificationService {
     —
     Nimo Crypto Price Service
 `.trim();
-    
+     logger.info('Ready to call email client.', {
+      userId,
+      coin,
+      currency
+    });
     await sesClient.sendEmail({
       to: userId,
       subject,
