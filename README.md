@@ -296,23 +296,74 @@ User searches ethereum same time   → email sent ✓ (different coin)
 User searches bitcoin 6 min later  → email sent ✓ (window expired)
 ```
 
-**Why DynamoDB instead of in-memory?** A Lambda execution environment can be recycled or scaled to multiple instances. An in-memory `Map` resets on cold start and is not shared across instances. DynamoDB-backed dedup is reliable across all invocations.
-
-### SES smoke test
-
-To verify SES credentials and identity verification independently of the Lambda:
-
-```bash
-AWS_REGION=ap-southeast-2 \
-EMAIL_FROM_ADDRESS=your-verified@email.com \
-node crypto-price-service/scripts/test-email.js recipient@example.com
-```
-
-The script (`crypto-price-service/scripts/test-email.js`) sends a single email directly via the SDK, bypassing the notification service and dedup logic. It prints specific guidance for `MessageRejected`, `AccessDeniedException`, and `MailFromDomainNotVerifiedException` errors.
-
-
 ---
+## Code Quality and Engineering Practices Implemented
 
+### Layered Architecture
+
+The codebase follows a clear separation of concerns:
+
+- **Handlers** handle API Gateway/Lambda events.
+- **Validators** validate incoming request parameters.
+- **Services** coordinate business logic.
+- **Repositories** handle database access.
+- **Clients** encapsulate external integrations such as CoinGecko, DynamoDB, and SES.
+
+This keeps Lambda handlers small and makes the application easier to test, maintain, and extend.
+
+### Centralized Error Handling
+
+The application uses shared custom error classes such as `ValidationError`, `NotFoundError`, and `ExternalServiceError`.
+
+Errors are converted into consistent API responses using a shared response helper. This ensures all endpoints return the same response format for both success and failure cases.
+
+### Structured Logging
+
+A shared logger is used across the application to produce consistent structured logs.
+
+Logs include useful metadata such as request ID, user ID, coin, and operation context. This makes debugging easier in both local development and Amazon CloudWatch.
+
+### Request Validation
+
+Request validation is handled before business logic runs.
+
+The application validates required query parameters such as `coin`, `email`, and `userId`, returning clear `400 Bad Request` responses when input is invalid.
+
+### External Service Abstraction
+
+External systems are wrapped in dedicated client modules.
+
+For example, CoinGecko API access is isolated inside a CoinGecko client, while DynamoDB access is isolated inside repository modules. This prevents third-party implementation details from leaking into business logic.
+
+### DynamoDB Access Pattern
+
+DynamoDB operations are handled through repository functions.
+
+The application uses a query-first design with `userId` as the partition key and `searchedAt` as the sort key, allowing efficient retrieval of user search history without scanning the table.
+
+### Reusable Shared Utilities
+
+Common functionality such as logging, response formatting, error classes, and configuration helpers is kept in shared modules.
+
+This reduces duplication and keeps both microservices consistent.
+
+### Environment-Based Configuration
+
+Configuration values are read from environment variables.
+
+This allows the same codebase to run locally with DynamoDB Local and in AWS with managed DynamoDB without code changes.
+
+### Minimal IAM Permissions
+
+Lambda functions are granted only the permissions they need.
+
+For example, the price service has permission to write search history, while the history service only has permission to query search history.
+
+### Non-Blocking Email Flow
+
+Email notification is handled separately from the main price response path.
+
+This ensures that email delivery issues do not block the API response or prevent price/history data from being saved.
 ## Security
 
 ### Least-privilege IAM
@@ -463,15 +514,6 @@ Test #12 is the key invariant — it proves the 5-minute dedup timestamp is comp
 | 17 | Missing `email` in history request | 400 |
 | 18 | Empty history (new user) | 200 with `{ items: [], count: 0 }` |
 
-### Intentionally deferred
-
-| Layer | Reason |
-|-------|--------|
-| `historyRepository.js` | Requires DynamoDB Local — valuable integration test, out of scope for take-home |
-| `coinGeckoClient.js` | Fetch mocking adds noise for low value at this stage |
-| `sesClient.js` / `emailNotificationService.js` | Thin wrappers; covered indirectly via service-layer mocks |
-| End-to-end | `sam local start-api` manual verification is sufficient |
-
 ---
 
 ## CI/CD
@@ -549,7 +591,7 @@ aws cloudformation describe-stacks \
 ```
 ---
 
-## Future Enhancements
+## Future Improvements
 
 ### 1. SQS-based async email worker
 
@@ -559,8 +601,6 @@ Replace the in-Lambda SES call with an SQS FIFO queue publish. A dedicated `Emai
 - Built-in retry and backoff via SQS visibility timeout
 - Dead Letter Queue (DLQ) captures failed sends for inspection
 - SQS FIFO deduplication IDs replace the DynamoDB `findRecentSearch` query
-
-Only `priceService.js` changes — the `EmailNotificationService` class and all callers remain untouched.
 
 ### 2. API Key authentication
 
