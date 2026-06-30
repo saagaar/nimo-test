@@ -30,7 +30,7 @@ export const errorResponse = (error) => ({
     error: {
       message:
         error.statusCode === 500
-          ? 'Internal server error,' + error.message 
+          ? 'Internal server error,' 
           : error.message || 'Request failed'
     }
   })

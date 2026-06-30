@@ -6,7 +6,7 @@ const client = new SESClient({ region: config.awsRegion });
 
 export const sesClient = {
   async sendEmail({ to, subject, body }) {
-    console.log('**************hey hey,',{ ToAddresses: [to] })
+   
     await client.send(
       new SendEmailCommand({
         Source:  'saagarchapagain@gmail.com',
