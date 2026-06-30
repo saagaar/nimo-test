@@ -68,8 +68,6 @@ nimo-test/
 │       ├── shared/
 │       └── config/
 │
-├── docs/
-│   └── openapi.yaml            # OpenAPI 3.0 spec
 ├── infra/
 │   └── template.yaml           # AWS SAM template (Lambda, API Gateway, DynamoDB)
 ├── env.local.json              # Local env vars for sam local start-api (not committed)
