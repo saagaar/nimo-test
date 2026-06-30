@@ -153,17 +153,13 @@ handler (getHistory.js)
 
 ## API Reference
 
-**Interactive docs (Swagger UI):**
-[Open in Swagger Editor](https://editor.swagger.io/?url=https://raw.githubusercontent.com/saagaar/nimo-test/main/docs/openapi.yaml)
-
-The full OpenAPI 3.0 spec is at [`docs/openapi.yaml`](docs/openapi.yaml).
 
 ### Base URLs
 
 | Environment | URL |
 |-------------|-----|
 | Local (`sam local`) | `http://localhost:3000` |
-| AWS Production | `https://<api-id>.execute-api.ap-southeast-2.amazonaws.com/Prod` |
+| AWS Production | `https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/.execute-api.ap-southeast-2.amazonaws.com/Prod` |
 
 ---
 
@@ -213,7 +209,7 @@ Returns all cryptocurrency searches made by a user, sorted newest first.
 **Example**
 
 ```bash
-curl "https://<api-url>/Prod/history?email=user@example.com"
+curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod//Prod/history?email=user@example.com"
 ```
 
 **200 Response**
