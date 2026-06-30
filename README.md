@@ -154,7 +154,7 @@ handler (getHistory.js)
 | Environment | URL |
 |-------------|-----|
 | Local (`sam local`) | `http://localhost:3000` |
-| AWS Production | `https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/.execute-api.ap-southeast-2.amazonaws.com/Prod` |
+| AWS Production | `https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/` |
 
 ---
 
@@ -204,7 +204,7 @@ Returns all cryptocurrency searches made by a user, sorted newest first.
 **Example**
 
 ```bash
-curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod//Prod/history?email=user@example.com"
+curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/history?email=user@example.com"
 ```
 
 **200 Response**
