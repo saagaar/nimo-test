@@ -35,7 +35,7 @@ export class EmailNotificationService {
       subject,
       body
     });
-console.log('going email notification:', { userId, coin, currency, price, searchedAt });
+
     logger.info('Price notification email sent.', {
       userId,
       coin,

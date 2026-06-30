@@ -106,7 +106,9 @@ Resources:
               Resource: !GetAtt CryptoSearchHistoryTable.Arn
             - Effect: Allow
               # Scoped to verified SES identities in this account — not a wildcard *.
-              Action: ses:SendEmail
+              Action: 
+                - ses:SendEmail
+                - ses:SendRawEmail
               Resource: !Sub "arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*"
       Events:
         GetPriceApi:

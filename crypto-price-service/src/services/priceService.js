@@ -60,7 +60,7 @@ export async function savePriceHistoryService(input) {
   // Fire-and-forget: SES failure must never block or fail the price response.
 
    if (!recentSearch) {
-    console.log('now sending email')
+    
     emailNotificationService.send({
       userId: email,
       coin: priceResult.coin,
@@ -79,6 +79,7 @@ export async function savePriceHistoryService(input) {
   }
   return {
     coin: priceResult.coin,
+    email: email,
     currency: priceResult.currency,
     price: priceResult.price,
     searchedAt: historyRecord.searchedAt
