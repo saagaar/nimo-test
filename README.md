@@ -174,7 +174,7 @@ Fetches the current price of a cryptocurrency, records the search in DynamoDB, a
 **Example**
 
 ```bash
-curl "https://(https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/price?coin=bitcoin&email=user@example.com"
+curl "https://1e64rdz9k3.execute-api.ap-southeast-2.amazonaws.com/Prod/price?coin=bitcoin&email=user@example.com"
 ```
 
 **200 Response**
